@@ -7,7 +7,7 @@
 
 use shared_structs::Uniforms;
 use spirv_std::{
-    glam::{self, Mat3, Mat4, Vec2, Vec3, Vec4},
+    glam::{Mat3, Mat4, Vec2, Vec3, Vec4},
     num_traits::Float,
     Image, Sampler,
 };
@@ -45,7 +45,7 @@ pub fn fragment(
     #[spirv(descriptor_set = 0, binding = 5)] emissive_texture: &SampledImage,
     output: &mut Vec4,
 ) {
-    let diffuse: Vec4 = unsafe { albedo_texture.sample(*sampler, uv) };
+    let diffuse: Vec4 = albedo_texture.sample(*sampler, uv);
     let emission: Vec4 = emissive_texture.sample(*sampler, uv);
     let emission = emission.truncate();
     let metallic_roughness: Vec4 = metallic_roughness_texture.sample(*sampler, uv);
@@ -74,6 +74,57 @@ pub fn fragment(
     };
 
     let result = glam_pbr::basic_brdf(brdf_params);
+
+    *output = linear_to_srgb(result.diffuse + result.specular + emission).extend(1.0);
+}
+
+#[spirv(fragment)]
+pub fn fragment_alpha_clipped(
+    position: Vec3,
+    normal: Vec3,
+    uv: Vec2,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
+    #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 2)] albedo_texture: &SampledImage,
+    #[spirv(descriptor_set = 0, binding = 3)] normal_texture: &SampledImage,
+    #[spirv(descriptor_set = 0, binding = 4)] metallic_roughness_texture: &SampledImage,
+    #[spirv(descriptor_set = 0, binding = 5)] emissive_texture: &SampledImage,
+    output: &mut Vec4,
+) {
+    let diffuse: Vec4 = albedo_texture.sample(*sampler, uv);
+
+    let emission: Vec4 = emissive_texture.sample(*sampler, uv);
+    let emission = emission.truncate();
+    let metallic_roughness: Vec4 = metallic_roughness_texture.sample(*sampler, uv);
+    let metallic = metallic_roughness.z;
+    let roughness = metallic_roughness.y;
+
+    let view_vector = (uniforms.eye_position - position).normalize();
+
+    let normal = calculate_normal(normal, uv, view_vector, sampler, normal_texture);
+
+    let material_params = glam_pbr::MaterialParams {
+        diffuse_colour: diffuse.truncate(),
+        metallic,
+        perceptual_roughness: glam_pbr::PerceptualRoughness(roughness),
+        index_of_refraction: glam_pbr::IndexOfRefraction::default(),
+        specular_colour: Vec3::ONE,
+        specular_factor: 1.0,
+    };
+
+    let brdf_params = glam_pbr::BasicBrdfParams {
+        normal,
+        light: glam_pbr::Light(Vec3::ONE.normalize()),
+        light_intensity: Vec3::ONE,
+        view: glam_pbr::View(view_vector),
+        material_params,
+    };
+
+    let result = glam_pbr::basic_brdf(brdf_params);
+
+    if diffuse.w < 0.5 {
+        spirv_std::arch::kill();
+    }
 
     *output = linear_to_srgb(result.diffuse + result.specular + emission).extend(1.0);
 }
@@ -119,4 +170,26 @@ fn compute_cotangent_frame(normal: Vec3, position: Vec3, uv: Vec2) -> Mat3 {
     // construct a scale-invariant frame
     let invmax = 1.0 / t.length_squared().max(b.length_squared()).sqrt();
     Mat3::from_cols(t * invmax, b * invmax, normal)
+}
+
+#[spirv(vertex)]
+pub fn fullscreen_tri(
+    #[spirv(vertex_index)] vert_idx: i32,
+    uv: &mut Vec2,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+) {
+    *uv = Vec2::new(((vert_idx << 1) & 2) as f32, (vert_idx & 2) as f32);
+    let pos = 2.0 * *uv - Vec2::ONE;
+
+    *builtin_pos = Vec4::new(pos.x, pos.y, 0.0, 1.0);
+}
+
+#[spirv(fragment)]
+pub fn blit(
+    uv: Vec2,
+    #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 1)] texture: &SampledImage,
+    output: &mut Vec4,
+) {
+    *output = texture.sample(*sampler, uv);
 }

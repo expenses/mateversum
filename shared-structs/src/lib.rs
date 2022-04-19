@@ -38,3 +38,19 @@ impl From<Mat4> for DecompMat {
         }
     }
 }
+
+#[derive(Clone, Copy, Default)]
+#[cfg_attr(not(target_arch = "spirv"), derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct MaterialSettings {
+    pub base_color_factor: Vec4,
+    pub emissive_factor: Vec3,
+    #[cfg(not(target_arch = "spirv"))]
+    pub _padding0: u32,
+    pub metallic_factor: f32,
+    #[cfg(not(target_arch = "spirv"))]
+    pub _padding1: u32,
+    pub roughness_factor: f32,
+    #[cfg(not(target_arch = "spirv"))]
+    pub _padding2: u32,
+}
