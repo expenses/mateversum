@@ -39,10 +39,10 @@ pub fn fragment(
     uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
-    #[spirv(descriptor_set = 0, binding = 2)] albedo_texture: &SampledImage,
-    #[spirv(descriptor_set = 0, binding = 3)] normal_texture: &SampledImage,
-    #[spirv(descriptor_set = 0, binding = 4)] metallic_roughness_texture: &SampledImage,
-    #[spirv(descriptor_set = 0, binding = 5)] emissive_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
     output: &mut Vec4,
 ) {
     let diffuse: Vec4 = albedo_texture.sample(*sampler, uv);
@@ -85,10 +85,10 @@ pub fn fragment_alpha_clipped(
     uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
-    #[spirv(descriptor_set = 0, binding = 2)] albedo_texture: &SampledImage,
-    #[spirv(descriptor_set = 0, binding = 3)] normal_texture: &SampledImage,
-    #[spirv(descriptor_set = 0, binding = 4)] metallic_roughness_texture: &SampledImage,
-    #[spirv(descriptor_set = 0, binding = 5)] emissive_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
     output: &mut Vec4,
 ) {
     let diffuse: Vec4 = albedo_texture.sample(*sampler, uv);

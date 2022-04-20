@@ -1,11 +1,26 @@
 use futures::FutureExt;
 use glam::{Mat4, Vec3};
 use kiss_engine_wgpu::{
-    BindingResource, Device, RenderPipelineDesc, Resource, ShaderSettings, Texture,
-    VertexBufferLayout,
+    BindingResource, Device, RenderPipelineDesc, ShaderSettings, VertexBufferLayout,
 };
 use wasm_webxr_helpers::{button_click_future, create_button};
-use wgpu::util::DeviceExt;
+
+mod assets;
+
+use assets::{
+    load_gltf, load_single_pixel_image, prune_fetched_images, FetchedImages, ModelLoadContext,
+};
+
+enum AnisotrophicFilteringLevel {
+    L2 = 2,
+    L4 = 4,
+    L8 = 8,
+    L16 = 16,
+}
+
+struct PerformanceSettings {
+    anisotrophic_filtering_level: Option<AnisotrophicFilteringLevel>,
+}
 
 async fn run() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -101,56 +116,162 @@ async fn run() {
         .await
         .expect("Unable to find a suitable GPU adapter!");
 
-    let mut device: kiss_engine_wgpu::Device<(&str, u32, u32)> =
-        kiss_engine_wgpu::Device::new(device);
+    let mut device = Device::new(device);
 
-    let mut images = Images::default();
+    let mut fetched_images = FetchedImages::default();
 
     let base_url = url::Url::parse("http://localhost:8000").unwrap();
 
-    let linear_sampler =
-        device.create_resource(device.inner.create_sampler(&wgpu::SamplerDescriptor {
+    let performance_settings = PerformanceSettings {
+        anisotrophic_filtering_level: Some(AnisotrophicFilteringLevel::L16),
+    };
+
+    let linear_sampler = device.create_resource(
+        device.inner.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
-            anisotropy_clamp: Some(std::num::NonZeroU8::new(16).unwrap()),
+            anisotropy_clamp: performance_settings
+                .anisotrophic_filtering_level
+                .map(|level| std::num::NonZeroU8::new(level as u8).unwrap()),
             ..Default::default()
-        }));
+        }),
+    );
+
+    let pbr_pipeline = kiss_engine_wgpu::create_render_pipeline(
+        &device.inner,
+        "pbr pipeline",
+        device.get_shader(
+            "vertex.spv",
+            include_bytes!("../vertex.spv"),
+            ShaderSettings {
+                entry_point: "vertex",
+                ..Default::default()
+            },
+        ),
+        device.get_shader(
+            "fragment.spv",
+            include_bytes!("../fragment.spv"),
+            ShaderSettings {
+                entry_point: "fragment",
+                ..Default::default()
+            },
+        ),
+        RenderPipelineDesc {
+            primitive: wgpu::PrimitiveState {
+                // as we're flipping things in the shaders.
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_compare: wgpu::CompareFunction::Less,
+            ..Default::default()
+        },
+        &[
+            VertexBufferLayout {
+                location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            VertexBufferLayout {
+                location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            VertexBufferLayout {
+                location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+        ],
+        &[wgpu::TextureFormat::Rgba8Unorm],
+        Some(wgpu::TextureFormat::Depth32Float),
+    );
+
+    let pbr_alpha_clipped_pipeline = kiss_engine_wgpu::create_render_pipeline(
+        &device.inner,
+        "pbr alpha clipped pipeline",
+        device.get_shader(
+            "vertex.spv",
+            include_bytes!("../vertex.spv"),
+            ShaderSettings {
+                entry_point: "vertex",
+                ..Default::default()
+            },
+        ),
+        device.get_shader(
+            "fragment_alpha_clipped.spv",
+            include_bytes!("../fragment_alpha_clipped.spv"),
+            ShaderSettings {
+                entry_point: "fragment_alpha_clipped",
+                ..Default::default()
+            },
+        ),
+        RenderPipelineDesc {
+            primitive: wgpu::PrimitiveState {
+                // as we're flipping things in the shaders.
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_compare: wgpu::CompareFunction::Less,
+            ..Default::default()
+        },
+        &[
+            VertexBufferLayout {
+                location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            VertexBufferLayout {
+                location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            VertexBufferLayout {
+                location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+        ],
+        &[wgpu::TextureFormat::Rgba8Unorm],
+        Some(wgpu::TextureFormat::Depth32Float),
+    );
 
     let mut context = ModelLoadContext {
-        black_image_id: images.push(load_single_pixel_image(
-            &device,
-            &queue,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            &[0, 0, 0, 255],
-        )),
-        default_metallic_roughness_image_id: images.push(load_single_pixel_image(
-            &device,
-            &queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            &[0, 255, 0, 255],
-        )),
-        flat_normals_image_id: images.push(load_single_pixel_image(
-            &device,
-            &queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            &[0, 255, 0, 255],
-        )),
-        white_image_id: images.push(load_single_pixel_image(
-            &device,
-            &queue,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            &[255, 255, 255, 255],
-        )),
         url: url::Url::options()
             .base_url(Some(&base_url))
             .parse("sample_models/Sponza/glTF/Sponza.gltf")
             .unwrap(),
         device: &device,
         queue: &queue,
-        images: &mut images,
+        fetched_images: &mut fetched_images,
+        pbr_pipeline: &pbr_pipeline,
+        pbr_alpha_clipped_pipeline: &pbr_alpha_clipped_pipeline,
+        black_image: load_single_pixel_image(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            &[0, 0, 0, 255],
+        ),
+        default_metallic_roughness_image: load_single_pixel_image(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            &[0, 255, 0, 255],
+        ),
+        flat_normals_image: load_single_pixel_image(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            &[0, 255, 0, 255],
+        ),
+        white_image: load_single_pixel_image(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            &[255, 255, 255, 255],
+        ),
     };
     let model = load_gltf(&mut context).await;
 
@@ -365,53 +486,7 @@ async fn run() {
 
             let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
-            let pipeline = device.get_pipeline(
-                "pbr pipeline",
-                device.device.get_shader(
-                    "vertex.spv",
-                    include_bytes!("../vertex.spv"),
-                    ShaderSettings {
-                        entry_point: "vertex",
-                        ..Default::default()
-                    },
-                ),
-                device.device.get_shader(
-                    "fragment.spv",
-                    include_bytes!("../fragment.spv"),
-                    ShaderSettings {
-                        entry_point: "fragment",
-                        ..Default::default()
-                    },
-                ),
-                RenderPipelineDesc {
-                    primitive: wgpu::PrimitiveState {
-                        // as we're flipping things in the shaders.
-                        cull_mode: Some(wgpu::Face::Front),
-                        ..Default::default()
-                    },
-                    depth_compare: wgpu::CompareFunction::Less,
-                    ..Default::default()
-                },
-                &[
-                    VertexBufferLayout {
-                        location: 0,
-                        format: wgpu::VertexFormat::Float32x3,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                    },
-                    VertexBufferLayout {
-                        location: 1,
-                        format: wgpu::VertexFormat::Float32x3,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                    },
-                    VertexBufferLayout {
-                        location: 2,
-                        format: wgpu::VertexFormat::Float32x2,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                    },
-                ],
-            );
-
-            render_pass.set_pipeline(&pipeline.pipeline);
+            render_pass.set_pipeline(&pbr_pipeline.pipeline);
 
             for primitive in &model.opaque_primitives {
                 render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
@@ -420,6 +495,8 @@ async fn run() {
                 render_pass
                     .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
 
+                render_pass.set_bind_group(1, &primitive.bind_group, &[]);
+
                 for (i, viewport) in viewports.iter().enumerate() {
                     render_pass.set_viewport(
                         viewport.x,
@@ -429,70 +506,20 @@ async fn run() {
                         0.0,
                         1.0,
                     );
+
                     let bind_group = device.get_bind_group(
-                        ("pbr pipeline", i as u32, primitive.primitive_id),
-                        pipeline,
-                        &[
-                            uniform_buffer(i),
-                            BindingResource::Sampler(&linear_sampler),
-                            images.get(primitive.albedo_texture_id),
-                            images.get(primitive.normal_texture_id),
-                            images.get(primitive.metallic_roughness_texture_id),
-                            images.get(primitive.emissive_texture_id),
-                        ],
+                        ("pbr pipeline uniform", i as u32),
+                        0,
+                        &pbr_pipeline,
+                        &[uniform_buffer(i), BindingResource::Sampler(&linear_sampler)],
                     );
+
                     render_pass.set_bind_group(0, bind_group, &[]);
                     render_pass.draw_indexed(0..primitive.num_indices, 0, 0..1);
                 }
             }
 
-            let pipeline = device.get_pipeline(
-                "pbr alpha clipped pipeline",
-                device.device.get_shader(
-                    "vertex.spv",
-                    include_bytes!("../vertex.spv"),
-                    ShaderSettings {
-                        entry_point: "vertex",
-                        ..Default::default()
-                    },
-                ),
-                device.device.get_shader(
-                    "fragment_alpha_clipped.spv",
-                    include_bytes!("../fragment_alpha_clipped.spv"),
-                    ShaderSettings {
-                        entry_point: "fragment_alpha_clipped",
-                        ..Default::default()
-                    },
-                ),
-                RenderPipelineDesc {
-                    primitive: wgpu::PrimitiveState {
-                        // as we're flipping things in the shaders.
-                        cull_mode: Some(wgpu::Face::Front),
-                        ..Default::default()
-                    },
-                    depth_compare: wgpu::CompareFunction::Less,
-                    ..Default::default()
-                },
-                &[
-                    VertexBufferLayout {
-                        location: 0,
-                        format: wgpu::VertexFormat::Float32x3,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                    },
-                    VertexBufferLayout {
-                        location: 1,
-                        format: wgpu::VertexFormat::Float32x3,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                    },
-                    VertexBufferLayout {
-                        location: 2,
-                        format: wgpu::VertexFormat::Float32x2,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                    },
-                ],
-            );
-
-            render_pass.set_pipeline(&pipeline.pipeline);
+            render_pass.set_pipeline(&pbr_alpha_clipped_pipeline.pipeline);
 
             for primitive in &model.alpha_clipped_primitives {
                 render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
@@ -501,6 +528,8 @@ async fn run() {
                 render_pass
                     .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
 
+                render_pass.set_bind_group(1, &primitive.bind_group, &[]);
+
                 for (i, viewport) in viewports.iter().enumerate() {
                     render_pass.set_viewport(
                         viewport.x,
@@ -511,16 +540,10 @@ async fn run() {
                         1.0,
                     );
                     let bind_group = device.get_bind_group(
-                        ("pbr pipeline", i as u32, primitive.primitive_id),
-                        pipeline,
-                        &[
-                            uniform_buffer(i),
-                            BindingResource::Sampler(&linear_sampler),
-                            images.get(primitive.albedo_texture_id),
-                            images.get(primitive.normal_texture_id),
-                            images.get(primitive.metallic_roughness_texture_id),
-                            images.get(primitive.emissive_texture_id),
-                        ],
+                        ("pbr pipeline alpha clipped uniform", i as u32),
+                        0,
+                        &pbr_alpha_clipped_pipeline,
+                        &[uniform_buffer(i), BindingResource::Sampler(&linear_sampler)],
                     );
                     render_pass.set_bind_group(0, bind_group, &[]);
                     render_pass.draw_indexed(0..primitive.num_indices, 0, 0..1);
@@ -539,538 +562,3 @@ async fn run() {
 fn main() {
     wasm_bindgen_futures::spawn_local(run());
 }
-
-struct ModelLoadContext<'a> {
-    device: &'a Device<(&'static str, u32, u32)>,
-    queue: &'a wgpu::Queue,
-    url: url::Url,
-    images: &'a mut Images,
-    black_image_id: usize,
-    white_image_id: usize,
-    default_metallic_roughness_image_id: usize,
-    flat_normals_image_id: usize,
-}
-
-struct ModelBuffers<'a> {
-    map: std::collections::HashMap<usize, Vec<u8>>,
-    blob: Option<&'a Vec<u8>>,
-}
-
-struct Model {
-    opaque_primitives: Vec<ModelPrimitive>,
-    alpha_clipped_primitives: Vec<ModelPrimitive>,
-}
-
-async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
-    let bytes = fetch_bytes(&context.url).await;
-
-    let gltf = gltf::Gltf::from_slice(&bytes).unwrap();
-
-    let mut buffers = ModelBuffers {
-        blob: gltf.blob.as_ref(),
-        map: Default::default(),
-    };
-
-    let node_tree = gltf_helpers::NodeTree::new(gltf.nodes());
-
-    let mut opaque_primitives = Vec::new();
-    let mut alpha_clipped_primitives = Vec::new();
-    let mut next_primitive_id = 0;
-
-    for buffer in gltf.buffers() {
-        match buffer.source() {
-            gltf::buffer::Source::Bin => {}
-            gltf::buffer::Source::Uri(uri) => {
-                let url = url::Url::options()
-                    .base_url(Some(&context.url))
-                    .parse(uri)
-                    .unwrap();
-
-                if url.scheme() == "data" {
-                    let (mime_type, data) = url.path().split_once(',').unwrap();
-                    log::info!("Got: {}", mime_type);
-                    buffers
-                        .map
-                        .insert(buffer.index(), base64::decode(data).unwrap());
-                } else {
-                    buffers.map.insert(buffer.index(), fetch_bytes(&url).await);
-                }
-            }
-        }
-    }
-
-    for (node, mesh) in gltf
-        .nodes()
-        .filter_map(|node| node.mesh().map(|mesh| (node, mesh)))
-    {
-        let transform = node_tree.transform_of(node.index());
-
-        //log::info!("transform: {:?}", transform);
-        for primitive in mesh.primitives() {
-            let reader = primitive.reader(|buffer| match buffer.source() {
-                gltf::buffer::Source::Bin => Some(buffers.blob.unwrap()),
-                gltf::buffer::Source::Uri(_) => {
-                    buffers.map.get(&buffer.index()).map(|vec| &vec[..])
-                }
-            });
-
-            let indices: Vec<_> = reader.read_indices().unwrap().into_u32().collect();
-
-            let positions: Vec<glam::Vec3> = reader
-                .read_positions()
-                .unwrap()
-                .map(|pos| transform * Vec3::from(pos))
-                .collect();
-            let normals: Vec<glam::Vec3> = reader
-                .read_normals()
-                .unwrap()
-                .map(|rot| transform.rotation * Vec3::from(rot))
-                .collect();
-            let uvs: Vec<glam::Vec2> = reader
-                .read_tex_coords(0)
-                .unwrap()
-                .into_f32()
-                .map(glam::Vec2::from)
-                .collect();
-
-            let material = primitive.material();
-
-            let pbr = material.pbr_metallic_roughness();
-
-            log::info!(
-                "{:?}",
-                (
-                    pbr.metallic_factor(),
-                    pbr.roughness_factor(),
-                    pbr.base_color_factor(),
-                    material.emissive_factor(),
-                )
-            );
-
-            let primitive = ModelPrimitive {
-                indices: context.device.inner.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("indices"),
-                        contents: bytemuck::cast_slice(&indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    },
-                ),
-                positions: context.device.inner.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("positions"),
-                        contents: bytemuck::cast_slice(&positions),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    },
-                ),
-                normals: context.device.inner.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("normals"),
-                        contents: bytemuck::cast_slice(&normals),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    },
-                ),
-                uvs: context
-                    .device
-                    .inner
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("uvs"),
-                        contents: bytemuck::cast_slice(&uvs),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                albedo_texture_id: if let Some(albedo_texture) = pbr.base_color_texture() {
-                    load_image_from_gltf(&albedo_texture.texture(), true, &buffers, context).await
-                } else {
-                    context.white_image_id
-                },
-                normal_texture_id: if let Some(normal_texture) = material.normal_texture() {
-                    load_image_from_gltf(&normal_texture.texture(), false, &buffers, context).await
-                } else {
-                    context.flat_normals_image_id
-                },
-                metallic_roughness_texture_id: if let Some(metallic_roughness_texture) =
-                    pbr.metallic_roughness_texture()
-                {
-                    load_image_from_gltf(
-                        &metallic_roughness_texture.texture(),
-                        false,
-                        &buffers,
-                        context,
-                    )
-                    .await
-                } else {
-                    context.default_metallic_roughness_image_id
-                },
-                emissive_texture_id: if let Some(emissive_texture) = material.emissive_texture() {
-                    load_image_from_gltf(&emissive_texture.texture(), true, &buffers, context).await
-                } else {
-                    context.black_image_id
-                },
-                num_indices: indices.len() as u32,
-                primitive_id: next_primitive_id,
-            };
-
-            next_primitive_id += 1;
-
-            match material.alpha_mode() {
-                gltf::material::AlphaMode::Opaque => opaque_primitives.push(primitive),
-                _ => alpha_clipped_primitives.push(primitive),
-            }
-        }
-    }
-
-    Model {
-        opaque_primitives,
-        alpha_clipped_primitives,
-    }
-}
-
-async fn load_image_from_gltf(
-    texture: &gltf::Texture<'_>,
-    srgb: bool,
-    buffers: &ModelBuffers<'_>,
-    context: &mut ModelLoadContext<'_>,
-) -> usize {
-    let image = texture.source();
-
-    match image.source() {
-        gltf::image::Source::View { view, mime_type } => {
-            log::info!("{} {}", texture.index(), mime_type);
-            let buffer = view.buffer();
-
-            let buffer = match buffer.source() {
-                gltf::buffer::Source::Bin => buffers.blob.unwrap(),
-                gltf::buffer::Source::Uri(_) => buffers
-                    .map
-                    .get(&buffer.index())
-                    .map(|vec| &vec[..])
-                    .unwrap(),
-            };
-
-            let bytes = &buffer[view.offset()..view.offset() + view.length()];
-
-            let image = if mime_type == "image/ktx2" {
-                load_ktx2(context.device, context.queue, &bytes)
-            } else {
-                load_standard_image_format(context.device, &bytes, srgb)
-            };
-
-            context.images.push(image)
-        }
-        gltf::image::Source::Uri { uri, mime_type } => {
-            let url = url::Url::options()
-                .base_url(Some(&context.url))
-                .parse(uri)
-                .unwrap();
-
-            if url.scheme() == "data" {
-                let (_mime_type, data) = url.path().split_once(',').unwrap();
-
-                context.images.push(load_standard_image_format(
-                    context.device,
-                    &base64::decode(data).unwrap(),
-                    srgb,
-                ))
-            } else {
-                if let Some(&(id, cached_srgb)) = context.images.fetched_image_ids.get(&url) {
-                    if cached_srgb == srgb {
-                        return id;
-                    } else {
-                        log::warn!(
-                            "Same URL image is used twice, in both srgb and non-srgb formats: {}",
-                            url
-                        );
-                    }
-                }
-
-                let bytes = fetch_bytes(&url).await;
-
-                let image = if mime_type == Some("image/ktx2") {
-                    load_ktx2(context.device, context.queue, &bytes)
-                } else {
-                    load_standard_image_format(context.device, &bytes, srgb)
-                };
-
-                let id = context.images.push(image);
-
-                context.images.fetched_image_ids.insert(url, (id, srgb));
-
-                id
-            }
-        }
-    }
-}
-
-fn load_ktx2(
-    device: &Device<(&'static str, u32, u32)>,
-    queue: &wgpu::Queue,
-    bytes: &[u8],
-) -> Resource<Texture> {
-    let ktx2 = ktx2::Reader::new(bytes).unwrap();
-    let header = ktx2.header();
-    let mut levels = Vec::new();
-
-    for level in ktx2.levels() {
-        match header.supercompression_scheme {
-            Some(ktx2::SupercompressionScheme::Zstandard) => {
-                use std::io::Read;
-                let mut cursor = std::io::Cursor::new(level);
-                let mut decoded = Vec::new();
-                ruzstd::StreamingDecoder::new(&mut cursor)
-                    .unwrap()
-                    .read_to_end(&mut decoded)
-                    .unwrap();
-                levels.push(std::borrow::Cow::Owned(decoded));
-            }
-            Some(other) => panic!("Unsupported: {:?}", other),
-            None => {
-                levels.push(std::borrow::Cow::Borrowed(level));
-            }
-        }
-    }
-
-    //let flattened: Vec<u8> = levels.iter().flat_map(|vec| vec.iter().cloned()).collect();
-
-    for dfd in ktx2.data_format_descriptors() {
-        if dfd.header == ktx2::DataFormatDescriptorHeader::BASIC {
-            let basic_data_format_descriptor =
-                ktx2::BasicDataFormatDescriptor::parse(dfd.data).unwrap();
-
-            log::info!("{:?}", basic_data_format_descriptor.color_model);
-        }
-    }
-
-    log::info!("{:?} {:?}", levels.len(), header);
-
-    todo!();
-}
-
-fn load_standard_image_format(
-    device: &Device<(&'static str, u32, u32)>,
-    format_bytes: &[u8],
-    srgb: bool,
-) -> Resource<Texture> {
-    let image = image::load_from_memory(format_bytes).unwrap();
-
-    let image = image.to_rgba8();
-
-    let format = if srgb {
-        wgpu::TextureFormat::Rgba8UnormSrgb
-    } else {
-        wgpu::TextureFormat::Rgba8Unorm
-    };
-
-    let internal_format = if srgb {
-        glow::SRGB8_ALPHA8
-    } else {
-        glow::RGBA8
-    };
-
-    let mip_level_count = mip_levels_for_image_size(image.width(), image.height());
-
-    let texture_descriptor = &wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: image.width(),
-            height: image.height(),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-    };
-
-    // This is unfortunately the only way I could get mipmaps working as you can only write
-    // to the 0th mip.
-    let texture = unsafe {
-        device.inner.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
-            let device = device.unwrap();
-            let gl_context = device.gl_context();
-
-            use glow::HasContext;
-
-            let texture = gl_context.create_texture().unwrap();
-            gl_context.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl_context.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                internal_format as i32,
-                image.width() as i32,
-                image.height() as i32,
-                0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                Some(&*image),
-            );
-            gl_context.generate_mipmap(glow::TEXTURE_2D);
-            gl_context.bind_texture(glow::TEXTURE_2D, None);
-            texture
-        })
-    };
-
-    device.create_owned_texture_resource(unsafe {
-        device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
-            wgpu_hal::gles::Texture {
-                inner: wgpu_hal::gles::TextureInner::Texture {
-                    raw: texture,
-                    target: glow::TEXTURE_2D,
-                },
-                mip_level_count: 1,
-                array_layer_count: 1,
-                format,
-                format_desc: wgpu_hal::gles::TextureFormatDesc {
-                    internal: internal_format,
-                    external: glow::RGBA,
-                    data_type: glow::UNSIGNED_BYTE,
-                },
-                copy_size: wgpu_hal::CopyExtent {
-                    width: image.width(),
-                    height: image.height(),
-                    depth: 1,
-                },
-            },
-            texture_descriptor,
-        )
-    })
-}
-
-fn load_single_pixel_image(
-    device: &Device<(&'static str, u32, u32)>,
-    queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
-    bytes: &[u8; 4],
-) -> Resource<Texture> {
-    device.create_owned_texture_resource(device.inner.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        },
-        bytes,
-    ))
-}
-
-struct ModelPrimitive {
-    indices: wgpu::Buffer,
-    positions: wgpu::Buffer,
-    normals: wgpu::Buffer,
-    uvs: wgpu::Buffer,
-    normal_texture_id: usize,
-    albedo_texture_id: usize,
-    metallic_roughness_texture_id: usize,
-    emissive_texture_id: usize,
-    num_indices: u32,
-    primitive_id: u32,
-}
-
-async fn fetch_bytes(url: &url::Url) -> Vec<u8> {
-    let response: web_sys::Response = wasm_bindgen_futures::JsFuture::from(
-        web_sys::window().unwrap().fetch_with_str(url.as_str()),
-    )
-    .await
-    .unwrap()
-    .into();
-
-    let length = response.headers().get("content-length").unwrap().unwrap();
-    let length: u64 = length.parse().unwrap();
-
-    log::info!("Size in MB: {}", length as f32 / 1024.0 / 1024.0);
-
-    let array_buffer: js_sys::ArrayBuffer =
-        wasm_bindgen_futures::JsFuture::from(response.array_buffer().unwrap())
-            .await
-            .unwrap()
-            .into();
-
-    let uint8_buffer = js_sys::Uint8Array::new(&array_buffer);
-
-    uint8_buffer.to_vec()
-}
-
-#[derive(Default)]
-struct Images {
-    inner: Vec<Resource<Texture>>,
-    fetched_image_ids: std::collections::HashMap<url::Url, (usize, bool)>,
-}
-
-impl Images {
-    fn push(&mut self, image: Resource<Texture>) -> usize {
-        let id = self.inner.len();
-        self.inner.push(image);
-        id
-    }
-
-    fn get(&self, id: usize) -> BindingResource {
-        BindingResource::Texture(&self.inner[id])
-    }
-}
-
-fn mip_levels_for_image_size(width: u32, height: u32) -> u32 {
-    (width.max(height) as f32).log2() as u32 + 1
-}
-
-/*
-// Like the following, except without trying to write subsequent mips.
-// https://github.com/gfx-rs/wgpu/blob/0b61a191244da0f0d987d53614a6698097a7622f/wgpu/src/util/device.rs#L79-L146
-fn create_texture_with_first_mip_data(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    desc: &wgpu::TextureDescriptor,
-    data: &[u8],
-) -> wgpu::Texture {
-    use std::num::NonZeroU32;
-
-    // Implicitly add the COPY_DST usage
-    let mut desc = desc.to_owned();
-    desc.usage |= wgpu::TextureUsages::COPY_DST;
-    let texture = device.create_texture(&desc);
-
-    let format_info = desc.format.describe();
-    let layer_iterations = desc.array_layer_count();
-
-    let mut binary_offset = 0;
-    for layer in 0..layer_iterations {
-        let width_blocks = desc.size.width / format_info.block_dimensions.0 as u32;
-        let height_blocks = desc.size.height / format_info.block_dimensions.1 as u32;
-
-        let bytes_per_row = width_blocks * format_info.block_size as u32;
-        let data_size = bytes_per_row * height_blocks * desc.size.depth_or_array_layers;
-
-        let end_offset = binary_offset + data_size as usize;
-
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: 0,
-                    z: layer,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data[binary_offset..end_offset],
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(NonZeroU32::new(bytes_per_row).expect("invalid bytes per row")),
-                rows_per_image: Some(NonZeroU32::new(height_blocks).expect("invalid height")),
-            },
-            desc.size,
-        );
-
-        binary_offset = end_offset;
-    }
-
-    texture
-}
-*/
