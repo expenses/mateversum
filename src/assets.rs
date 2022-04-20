@@ -1,3 +1,4 @@
+use crevice::std140::AsStd140;
 use glam::{Vec2, Vec3};
 use kiss_engine_wgpu::{BindingResource, Device, RenderPipeline, Resource, Texture};
 use std::sync::Arc;
@@ -46,6 +47,7 @@ struct StagingModelPrimitive {
     normals: Vec<Vec3>,
     uvs: Vec<Vec2>,
     textures: MaterialTextures,
+    material_settings: Resource<wgpu::Buffer>,
 }
 
 impl StagingModelPrimitive {
@@ -64,6 +66,7 @@ impl StagingModelPrimitive {
                     BindingResource::Texture(&self.textures.normal_texture),
                     BindingResource::Texture(&self.textures.metallic_roughness_texture),
                     BindingResource::Texture(&self.textures.emissive_texture),
+                    BindingResource::Buffer(&self.material_settings),
                 ],
             ),
             num_indices: self.indices.len() as u32,
@@ -166,21 +169,28 @@ pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
                 std::collections::hash_map::Entry::Vacant(vacancy) => {
                     let pbr = material.pbr_metallic_roughness();
 
-                    log::info!(
-                        "{:?}",
-                        (
-                            pbr.metallic_factor(),
-                            pbr.roughness_factor(),
-                            pbr.base_color_factor(),
-                            material.emissive_factor(),
-                        )
-                    );
-
                     vacancy.insert(StagingModelPrimitive {
                         indices: Default::default(),
                         positions: Default::default(),
                         normals: Default::default(),
                         uvs: Default::default(),
+                        material_settings: context.device.create_resource(
+                            context.device.inner.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("material settings"),
+                                    contents: bytemuck::bytes_of(
+                                        &shared_structs::MaterialSettings {
+                                            base_color_factor: pbr.base_color_factor().into(),
+                                            emissive_factor: material.emissive_factor().into(),
+                                            metallic_factor: pbr.metallic_factor(),
+                                            roughness_factor: pbr.roughness_factor(),
+                                        }
+                                        .as_std140(),
+                                    ),
+                                    usage: wgpu::BufferUsages::UNIFORM,
+                                },
+                            ),
+                        ),
                         textures: MaterialTextures {
                             albedo_texture: if let Some(albedo_texture) = pbr.base_color_texture() {
                                 load_image_from_gltf(

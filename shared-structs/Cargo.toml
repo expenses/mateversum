@@ -9,4 +9,4 @@ edition = "2021"
 glam = { version = "0.20.5", features = ["libm"], default-features = false }
 
 [target.'cfg(not(target_arch = "spirv"))'.dependencies]
-bytemuck = { version = "1.9.1", features = ["derive"] }
+crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }

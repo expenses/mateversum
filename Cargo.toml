@@ -26,6 +26,7 @@ js-sys = "0.3.57"
 url = "2.2.2"
 ktx2 = "0.3.0"
 ruzstd = "0.2.4"
+crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
 
 [dependencies.web-sys]
 version = "0.3.36"

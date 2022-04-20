@@ -5,7 +5,7 @@
     no_std
 )]
 
-use shared_structs::Uniforms;
+use shared_structs::{MaterialSettings, Uniforms};
 use spirv_std::{
     glam::{Mat3, Mat4, Vec2, Vec3, Vec4},
     num_traits::Float,
@@ -19,17 +19,67 @@ pub fn vertex(
     position: Vec3,
     normal: Vec3,
     uv: Vec2,
+    scale: f32,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
     out_position: &mut Vec3,
     out_normal: &mut Vec3,
     out_uv: &mut Vec2,
 ) {
-    *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
+    let position = Mat4::from_scale(Vec3::splat(scale)) * position.extend(1.0);
+    *builtin_pos = Mat4::from(uniforms.projection_view) * position;
     builtin_pos.y = -builtin_pos.y;
-    *out_position = position;
+    *out_position = position.truncate();
     *out_normal = normal;
     *out_uv = uv;
+}
+
+struct TextureSampler {
+    sampler: Sampler,
+    uv: Vec2,
+}
+
+impl TextureSampler {
+    fn sample(&self, texture: &SampledImage) -> Vec4 {
+        texture.sample(self.sampler, self.uv)
+    }
+}
+
+struct ExtendedMaterialParams {
+    base: glam_pbr::MaterialParams,
+    alpha: f32,
+    emission: Vec3,
+}
+
+impl ExtendedMaterialParams {
+    pub fn new(
+        texture_sampler: &TextureSampler,
+        albedo_texture: &SampledImage,
+        metallic_roughness_texture: &SampledImage,
+        emissive_texture: &SampledImage,
+        material_settings: &MaterialSettings,
+    ) -> Self {
+        let diffuse = texture_sampler.sample(albedo_texture) * material_settings.base_color_factor;
+        let emission =
+            texture_sampler.sample(emissive_texture).truncate() * material_settings.emissive_factor;
+
+        let metallic_roughness = texture_sampler.sample(metallic_roughness_texture);
+        let metallic = metallic_roughness.z * material_settings.metallic_factor;
+        let roughness = metallic_roughness.y * material_settings.roughness_factor;
+
+        Self {
+            base: glam_pbr::MaterialParams {
+                diffuse_colour: diffuse.truncate(),
+                metallic,
+                perceptual_roughness: glam_pbr::PerceptualRoughness(roughness),
+                index_of_refraction: glam_pbr::IndexOfRefraction::default(),
+                specular_colour: Vec3::ONE,
+                specular_factor: 1.0,
+            },
+            alpha: diffuse.w,
+            emission,
+        }
+    }
 }
 
 #[spirv(fragment)]
@@ -43,39 +93,38 @@ pub fn fragment(
     #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 4, uniform)] material_settings: &MaterialSettings,
     output: &mut Vec4,
 ) {
-    let diffuse: Vec4 = albedo_texture.sample(*sampler, uv);
-    let emission: Vec4 = emissive_texture.sample(*sampler, uv);
-    let emission = emission.truncate();
-    let metallic_roughness: Vec4 = metallic_roughness_texture.sample(*sampler, uv);
-    let metallic = metallic_roughness.z;
-    let roughness = metallic_roughness.y;
+    let texture_sampler = TextureSampler {
+        sampler: *sampler,
+        uv,
+    };
+
+    let material_params = ExtendedMaterialParams::new(
+        &texture_sampler,
+        albedo_texture,
+        metallic_roughness_texture,
+        emissive_texture,
+        material_settings,
+    );
 
     let view_vector = (uniforms.eye_position - position).normalize();
 
-    let normal = calculate_normal(normal, uv, view_vector, sampler, normal_texture);
-
-    let material_params = glam_pbr::MaterialParams {
-        diffuse_colour: diffuse.truncate(),
-        metallic,
-        perceptual_roughness: glam_pbr::PerceptualRoughness(roughness),
-        index_of_refraction: glam_pbr::IndexOfRefraction::default(),
-        specular_colour: Vec3::ONE,
-        specular_factor: 1.0,
-    };
+    let normal = calculate_normal(normal, uv, view_vector, &texture_sampler, normal_texture);
 
     let brdf_params = glam_pbr::BasicBrdfParams {
         normal,
         light: glam_pbr::Light(Vec3::ONE.normalize()),
         light_intensity: Vec3::ONE,
         view: glam_pbr::View(view_vector),
-        material_params,
+        material_params: material_params.base,
     };
 
     let result = glam_pbr::basic_brdf(brdf_params);
 
-    *output = linear_to_srgb(result.diffuse + result.specular + emission).extend(1.0);
+    *output =
+        linear_to_srgb(result.diffuse + result.specular + material_params.emission).extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -89,44 +138,43 @@ pub fn fragment_alpha_clipped(
     #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 4, uniform)] material_settings: &MaterialSettings,
     output: &mut Vec4,
 ) {
-    let diffuse: Vec4 = albedo_texture.sample(*sampler, uv);
+    let texture_sampler = TextureSampler {
+        sampler: *sampler,
+        uv,
+    };
 
-    let emission: Vec4 = emissive_texture.sample(*sampler, uv);
-    let emission = emission.truncate();
-    let metallic_roughness: Vec4 = metallic_roughness_texture.sample(*sampler, uv);
-    let metallic = metallic_roughness.z;
-    let roughness = metallic_roughness.y;
+    let material_params = ExtendedMaterialParams::new(
+        &texture_sampler,
+        albedo_texture,
+        metallic_roughness_texture,
+        emissive_texture,
+        material_settings,
+    );
 
     let view_vector = (uniforms.eye_position - position).normalize();
 
-    let normal = calculate_normal(normal, uv, view_vector, sampler, normal_texture);
+    let normal = calculate_normal(normal, uv, view_vector, &texture_sampler, normal_texture);
 
-    let material_params = glam_pbr::MaterialParams {
-        diffuse_colour: diffuse.truncate(),
-        metallic,
-        perceptual_roughness: glam_pbr::PerceptualRoughness(roughness),
-        index_of_refraction: glam_pbr::IndexOfRefraction::default(),
-        specular_colour: Vec3::ONE,
-        specular_factor: 1.0,
-    };
+    // We can only do this after we've sampled all textures for naga control flow reasons.
+    if material_params.alpha < 0.5 {
+        spirv_std::arch::kill();
+    }
 
     let brdf_params = glam_pbr::BasicBrdfParams {
         normal,
         light: glam_pbr::Light(Vec3::ONE.normalize()),
         light_intensity: Vec3::ONE,
         view: glam_pbr::View(view_vector),
-        material_params,
+        material_params: material_params.base,
     };
 
     let result = glam_pbr::basic_brdf(brdf_params);
 
-    if diffuse.w < 0.5 {
-        spirv_std::arch::kill();
-    }
-
-    *output = linear_to_srgb(result.diffuse + result.specular + emission).extend(1.0);
+    *output =
+        linear_to_srgb(result.diffuse + result.specular + material_params.emission).extend(1.0);
 }
 
 fn linear_to_srgb(color_linear: Vec3) -> Vec3 {
@@ -140,12 +188,12 @@ fn calculate_normal(
     interpolated_normal: Vec3,
     uv: Vec2,
     view_vector: Vec3,
-    sampler: &Sampler,
+    texture_sampler: &TextureSampler,
     normal_map: &SampledImage,
 ) -> glam_pbr::Normal {
     let normal = interpolated_normal.normalize();
 
-    let map_normal: Vec4 = normal_map.sample(*sampler, uv);
+    let map_normal = texture_sampler.sample(normal_map);
     let map_normal = map_normal.truncate();
     let map_normal = map_normal * 255.0 / 127.0 - 128.0 / 127.0;
 

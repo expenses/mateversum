@@ -1,9 +1,11 @@
+use crevice::std140::AsStd140;
 use futures::FutureExt;
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use kiss_engine_wgpu::{
     BindingResource, Device, RenderPipelineDesc, ShaderSettings, VertexBufferLayout,
 };
 use wasm_webxr_helpers::{button_click_future, create_button};
+use wgpu::util::DeviceExt;
 
 mod assets;
 
@@ -184,6 +186,11 @@ async fn run() {
                 format: wgpu::VertexFormat::Float32x2,
                 step_mode: wgpu::VertexStepMode::Vertex,
             },
+            VertexBufferLayout {
+                location: 3,
+                format: wgpu::VertexFormat::Float32,
+                step_mode: wgpu::VertexStepMode::Instance,
+            },
         ],
         &[wgpu::TextureFormat::Rgba8Unorm],
         Some(wgpu::TextureFormat::Depth32Float),
@@ -232,6 +239,11 @@ async fn run() {
                 location: 2,
                 format: wgpu::VertexFormat::Float32x2,
                 step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            VertexBufferLayout {
+                location: 3,
+                format: wgpu::VertexFormat::Float32,
+                step_mode: wgpu::VertexStepMode::Instance,
             },
         ],
         &[wgpu::TextureFormat::Rgba8Unorm],
@@ -291,6 +303,14 @@ async fn run() {
             mapped_at_creation: false,
         }));
 
+    let instance_buffer = device.create_resource(device.inner.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("right eye uniform buffer"),
+            contents: bytemuck::bytes_of(&0.25_f32),
+            usage: wgpu::BufferUsages::VERTEX,
+        },
+    ));
+
     wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |_time, frame| {
         let xr_session: web_sys::XrSession = frame.session();
 
@@ -325,7 +345,6 @@ async fn run() {
         let base_layer = xr_session.render_state().base_layer().unwrap();
 
         {
-            let base_transform = Mat4::from_scale(Vec3::splat(0.25));
             let parse_matrix = |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
 
             let left_proj = parse_matrix(views[0].projection_matrix());
@@ -334,14 +353,16 @@ async fn run() {
             queue.write_buffer(
                 &left_eye_uniform_buffer,
                 0,
-                bytemuck::bytes_of(&shared_structs::Uniforms {
-                    projection_view: { left_proj * (left_inv * base_transform) }.into(),
-                    eye_position: {
-                        let p = views[0].transform().position();
-                        glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                    },
-                    _padding: 0,
-                }),
+                bytemuck::bytes_of(
+                    &shared_structs::Uniforms {
+                        projection_view: { left_proj * left_inv }.into(),
+                        eye_position: {
+                            let p = views[0].transform().position();
+                            glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
+                        },
+                    }
+                    .as_std140(),
+                ),
             );
 
             if let Some(right_view) = views.get(1) {
@@ -351,14 +372,16 @@ async fn run() {
                 queue.write_buffer(
                     &right_eye_uniform_buffer,
                     0,
-                    bytemuck::bytes_of(&shared_structs::Uniforms {
-                        projection_view: { right_proj * (right_inv * base_transform) }.into(),
-                        eye_position: {
-                            let p = right_view.transform().position();
-                            glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                        },
-                        _padding: 0,
-                    }),
+                    bytemuck::bytes_of(
+                        &shared_structs::Uniforms {
+                            projection_view: { right_proj * right_inv }.into(),
+                            eye_position: {
+                                let p = right_view.transform().position();
+                                glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
+                            },
+                        }
+                        .as_std140(),
+                    ),
                 );
             }
         }
@@ -487,6 +510,8 @@ async fn run() {
             let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
 
             render_pass.set_pipeline(&pbr_pipeline.pipeline);
+
+            render_pass.set_vertex_buffer(3, instance_buffer.slice(..));
 
             for primitive in &model.opaque_primitives {
                 render_pass.set_vertex_buffer(0, primitive.positions.slice(..));

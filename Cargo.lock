@@ -316,6 +316,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "crevice"
+version = "0.8.0"
+source = "git+https://github.com/LPGhatguy/crevice#0863f8508ab34f8625b4b2d29f5829b42969f7f1"
+dependencies = [
+ "bytemuck",
+ "crevice-derive",
+ "glam",
+ "mint",
+]
+
+[[package]]
+name = "crevice-derive"
+version = "0.8.0"
+source = "git+https://github.com/LPGhatguy/crevice#0863f8508ab34f8625b4b2d29f5829b42969f7f1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "cty"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -615,6 +636,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f43e957e744be03f5801a55472f593d43fabdebf25a4585db250f04d86b1675f"
 dependencies = [
  "bytemuck",
+ "mint",
  "num-traits",
 ]
 
@@ -1052,6 +1074,12 @@ checksum = "d2b29bd4bc3f33391105ebee3589c19197c4271e3e5a9ec9bfe8127eeff8f082"
 dependencies = [
  "adler",
 ]
+
+[[package]]
+name = "mint"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "mio"
@@ -1636,7 +1664,7 @@ dependencies = [
 name = "shared-structs"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
+ "crevice",
  "glam",
 ]
 
@@ -2050,6 +2078,7 @@ dependencies = [
  "bytemuck",
  "console_error_panic_hook",
  "console_log",
+ "crevice",
  "futures",
  "glam",
  "glow",
