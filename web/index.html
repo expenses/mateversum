@@ -1,18 +1,86 @@
 <!DOCTYPE html>
 <html>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    </head>
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-</head>
+    <body>
+        <script type="module">
+            let pc = new RTCPeerConnection({
+                iceServers: [
+                    {
+                        urls: "stun:stun.l.google.com:19302",
+                    },
+                ],
+            });
 
-<body>
-  <script type="module">
-    import init from "./pkg/webxr-pbr.js";
-    window.addEventListener("load", () => {
-      init();
-    });
-  </script>
-</body>
+            var udpLike = { ordered: false, maxRetransmits: 0 };
 
+            pc.oniceconnectionstatechange = (e) => console.log(pc.iceConnectionState);
+            pc.onicecandidate = (event) => {
+                if (event.candidate === null) {
+                    document.getElementById("localSessionDescription").value = btoa(JSON.stringify(pc.localDescription));
+                }
+            };
+
+            pc.ondatachannel = (e) => {
+              console.log(e);
+              window.sendChannel = e.channel;
+            };
+
+            pc.onnegotiationneeded = (e) =>
+                pc
+                    .createOffer()
+                    .then((d) => pc.setLocalDescription(d))
+                    .catch(console.log);
+
+            window.sendMessage = (uint8buf) => {
+                // https://stackoverflow.com/a/54646864
+                // a `Uint8Array.buffer` returns the whole buffer, which seems to be the whole wasm heap?
+                // So we need to slice it to the view we want. Not sure if we specifically need to do this or can just send
+                // the uint8array directly. Haven't tested it.
+                let ab = uint8buf.buffer.slice(uint8buf.byteOffset, uint8buf.byteLength + uint8buf.byteOffset);
+                //console.error(ab);
+                sendChannel.send(ab);
+            };
+
+            window.is_dom = false;
+
+            window.dom = () => {
+              let sendChannel = pc.createDataChannel("foo", udpLike);
+              sendChannel.onclose = () => console.log("sendChannel has closed");
+              sendChannel.onopen = () => console.log("sendChannel has opened");
+              sendChannel.onerror = (error) => console.log(error);
+              window.sendChannel = sendChannel;
+              window.is_dom = true;
+            };
+
+            window.startSession = async () => {
+                let sd = document.getElementById("remoteSessionDescription").value;
+                if (sd === "") {
+                    return alert("Session Description must not be empty");
+                }
+
+                console.log("starting");
+
+                await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(atob(sd))));;
+                if (!window.is_dom) {
+                  let answer = await pc.createAnswer();
+                  console.log(answer);
+                  await pc.setLocalDescription(answer);
+                }
+            };
+
+            import init from "./pkg/webxr-pbr.js";
+            window.addEventListener("load", async () => {
+                init();
+            });
+        </script>
+        Browser base64 Session Description <textarea id="localSessionDescription" readonly="true"></textarea> <br />
+        Golang base64 Session Description: <textarea id="remoteSessionDescription"></textarea> <br />
+        <button onclick="window.dom()">Dom</button> <br />
+        <button onclick="window.startSession()">Start</button> <br />
+        <br />
+    </body>
 </html>

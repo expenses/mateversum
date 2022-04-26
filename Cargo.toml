@@ -27,6 +27,11 @@ url = "2.2.2"
 ktx2 = "0.3.0"
 ruzstd = "0.2.4"
 crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
+wasm-bindgen = "0.2.80"
+wasm-streams = "0.2.2"
+basis-universal-wasm = { path = "../basis-universal-rs-wasm" }
+#rand = "0.8.5"
+#getrandom = { version = "0.2.6", features = ["js"] }
 
 [dependencies.web-sys]
 version = "0.3.36"
@@ -78,8 +83,11 @@ features = [
   "HtmlButtonElement",
   'HtmlVideoElement',
   'DomPointReadOnly',
+  'ReadableStream',
+  'XrInputSourceArray',
+  'RtcDataChannel',
+  'MessageEvent',
 ]
-
 
 [patch.crates-io]
 web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }

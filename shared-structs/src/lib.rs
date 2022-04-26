@@ -1,7 +1,7 @@
 #![no_std]
 
 #[cfg(not(target_arch = "spirv"))]
-use crevice::std140::{AsStd140, Std140};
+use crevice::std140::AsStd140;
 use glam::{Mat4, Vec3, Vec4};
 
 #[cfg_attr(not(target_arch = "spirv"), derive(crevice::std140::AsStd140))]

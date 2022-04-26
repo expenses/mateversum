@@ -7,7 +7,7 @@
 
 use shared_structs::{MaterialSettings, Uniforms};
 use spirv_std::{
-    glam::{Mat3, Mat4, Vec2, Vec3, Vec4},
+    glam::{self, Mat3, Mat4, Vec2, Vec3, Vec4},
     num_traits::Float,
     Image, Sampler,
 };
@@ -19,18 +19,22 @@ pub fn vertex(
     position: Vec3,
     normal: Vec3,
     uv: Vec2,
-    scale: f32,
+    instance_translation_and_scale: Vec4,
+    instance_rotation: glam::Quat,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
     out_position: &mut Vec3,
     out_normal: &mut Vec3,
     out_uv: &mut Vec2,
 ) {
-    let position = Mat4::from_scale(Vec3::splat(scale)) * position.extend(1.0);
-    *builtin_pos = Mat4::from(uniforms.projection_view) * position;
+    let instance_scale = instance_translation_and_scale.w;
+    let instance_translation = instance_translation_and_scale.truncate();
+
+    let position = instance_translation + (instance_rotation * instance_scale * position);
+    *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
     builtin_pos.y = -builtin_pos.y;
-    *out_position = position.truncate();
-    *out_normal = normal;
+    *out_position = position;
+    *out_normal = instance_rotation * normal;
     *out_uv = uv;
 }
 
@@ -240,4 +244,22 @@ pub fn blit(
     output: &mut Vec4,
 ) {
     *output = texture.sample(*sampler, uv);
+}
+
+#[spirv(vertex)]
+pub fn line_vertex(
+    position: Vec3,
+    colour: Vec3,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    out_colour: &mut Vec3,
+) {
+    *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
+    builtin_pos.y = -builtin_pos.y;
+    *out_colour = colour;
+}
+
+#[spirv(fragment)]
+pub fn flat_colour(colour: Vec3, output: &mut Vec4) {
+    *output = colour.extend(1.0);
 }

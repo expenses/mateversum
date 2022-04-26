@@ -7,7 +7,6 @@ use wgpu::util::DeviceExt;
 pub struct ModelLoadContext<'a> {
     pub device: &'a Device,
     pub queue: &'a wgpu::Queue,
-    pub url: url::Url,
     pub fetched_images: &'a mut FetchedImages,
     pub pbr_alpha_clipped_pipeline: &'a RenderPipeline,
     pub pbr_pipeline: &'a RenderPipeline,
@@ -15,6 +14,7 @@ pub struct ModelLoadContext<'a> {
     pub white_image: Arc<Resource<Texture>>,
     pub flat_normals_image: Arc<Resource<Texture>>,
     pub default_metallic_roughness_image: Arc<Resource<Texture>>,
+    pub supported_features: wgpu::Features,
 }
 
 struct ModelBuffers<'a> {
@@ -112,10 +112,17 @@ pub struct Model {
     pub alpha_clipped_primitives: Vec<ModelPrimitive>,
 }
 
-pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
-    let bytes = fetch_bytes(&context.url).await;
+pub async fn load_gltf_from_url(url: &url::Url, context: &mut ModelLoadContext<'_>) -> Model {
+    let bytes = fetch_bytes(url).await;
+    load_gltf_from_bytes(&bytes, Some(url), context).await
+}
 
-    let gltf = gltf::Gltf::from_slice(&bytes).unwrap();
+pub async fn load_gltf_from_bytes(
+    bytes: &[u8],
+    base_url: Option<&url::Url>,
+    context: &mut ModelLoadContext<'_>,
+) -> Model {
+    let gltf = gltf::Gltf::from_slice(bytes).unwrap();
 
     let mut buffers = ModelBuffers {
         blob: gltf.blob.as_ref(),
@@ -128,10 +135,7 @@ pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
         match buffer.source() {
             gltf::buffer::Source::Bin => {}
             gltf::buffer::Source::Uri(uri) => {
-                let url = url::Url::options()
-                    .base_url(Some(&context.url))
-                    .parse(uri)
-                    .unwrap();
+                let url = url::Url::options().base_url(base_url).parse(uri).unwrap();
 
                 if url.scheme() == "data" {
                     let (mime_type, data) = url.path().split_once(',').unwrap();
@@ -198,6 +202,7 @@ pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
                                     true,
                                     &buffers,
                                     context,
+                                    base_url,
                                 )
                                 .await
                             } else {
@@ -210,6 +215,7 @@ pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
                                     false,
                                     &buffers,
                                     context,
+                                    base_url,
                                 )
                                 .await
                             } else {
@@ -223,6 +229,7 @@ pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
                                     false,
                                     &buffers,
                                     context,
+                                    base_url,
                                 )
                                 .await
                             } else {
@@ -236,6 +243,7 @@ pub async fn load_gltf(context: &mut ModelLoadContext<'_>) -> Model {
                                     true,
                                     &buffers,
                                     context,
+                                    base_url,
                                 )
                                 .await
                             } else {
@@ -299,6 +307,7 @@ async fn load_image_from_gltf(
     srgb: bool,
     buffers: &ModelBuffers<'_>,
     context: &mut ModelLoadContext<'_>,
+    base_url: Option<&url::Url>,
 ) -> Arc<Resource<Texture>> {
     let image = texture.source();
 
@@ -318,19 +327,10 @@ async fn load_image_from_gltf(
 
             let bytes = &buffer[view.offset()..view.offset() + view.length()];
 
-            let image = if mime_type == "image/ktx2" {
-                load_ktx2(context.device, context.queue, bytes)
-            } else {
-                load_standard_image_format(context.device, bytes, srgb)
-            };
-
-            Arc::new(image)
+            Arc::new(load_image_from_mime_type(context, bytes, srgb, Some(mime_type)).await)
         }
         gltf::image::Source::Uri { uri, mime_type } => {
-            let url = url::Url::options()
-                .base_url(Some(&context.url))
-                .parse(uri)
-                .unwrap();
+            let url = url::Url::options().base_url(base_url).parse(uri).unwrap();
 
             if url.scheme() == "data" {
                 let (_mime_type, data) = url.path().split_once(',').unwrap();
@@ -354,13 +354,8 @@ async fn load_image_from_gltf(
 
                 let bytes = fetch_bytes(&url).await;
 
-                let image = if mime_type == Some("image/ktx2") {
-                    load_ktx2(context.device, context.queue, &bytes)
-                } else {
-                    load_standard_image_format(context.device, &bytes, srgb)
-                };
-
-                let image = Arc::new(image);
+                let image =
+                    Arc::new(load_image_from_mime_type(context, &bytes, srgb, mime_type).await);
 
                 context.fetched_images.insert(url, (image.clone(), srgb));
 
@@ -368,6 +363,148 @@ async fn load_image_from_gltf(
             }
         }
     }
+}
+
+async fn load_image_from_mime_type(
+    context: &ModelLoadContext<'_>,
+    bytes: &[u8],
+    srgb: bool,
+    mime_type: Option<&str>,
+) -> Resource<Texture> {
+    if mime_type == Some("image/ktx2") {
+        load_ktx2(context.device, context.queue, bytes)
+    } else if mime_type == Some("image/x.basis") {
+        load_basis(
+            context.device,
+            context.queue,
+            context.supported_features,
+            bytes,
+            srgb,
+        )
+    } else {
+        load_standard_image_format(context.device, bytes, srgb)
+    }
+}
+
+fn load_basis(
+    device: &Device,
+    queue: &wgpu::Queue,
+    supported_features: wgpu::Features,
+    bytes: &[u8],
+    srgb: bool,
+) -> Resource<Texture> {
+    let array = unsafe { js_sys::Uint8Array::view(bytes) };
+
+    let file = basis_universal_wasm::BasisFile::new(&array);
+
+    let image = 0;
+    let format = if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC_LDR) {
+        Format::Astc
+    } else if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+        Format::Bc7
+    } else if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2) {
+        Format::Etc2Rgba
+    } else {
+        Format::Rgba
+    };
+
+    let num_levels = file.get_num_levels(image);
+
+    let total_transcoded_size: u32 = (0..num_levels)
+        .map(|level| file.get_image_transcoded_size_in_bytes(image, level, format as u32))
+        .sum();
+
+    let transcoded_data = vec![0; total_transcoded_size as usize];
+
+    assert_eq!(file.start_transcoding(), 1);
+
+    let mut offset = 0;
+
+    for level in 0..num_levels {
+        let size = file.get_image_transcoded_size_in_bytes(image, level, format as u32);
+
+        let slice = unsafe {
+            js_sys::Uint8Array::view(
+                &transcoded_data[offset as usize..offset as usize + size as usize],
+            )
+        };
+
+        offset += size;
+
+        let res = file.transcode_image(&slice, image, level as u32, format as u32, 1, 0);
+
+        assert_eq!(res, 1);
+    }
+
+    let width = file.get_image_width(image, 0);
+    let height = file.get_image_height(image, 0);
+
+    #[derive(Clone, Copy, Debug)]
+    enum Format {
+        Etc2Rgba = 1,
+        Bc7 = 6,
+        Astc = 10,
+        Rgba = 13,
+    }
+
+    impl Format {
+        fn as_wgpu(&self, srgb: bool) -> wgpu::TextureFormat {
+            match self {
+                Self::Etc2Rgba => {
+                    if srgb {
+                        wgpu::TextureFormat::Etc2Rgba8UnormSrgb
+                    } else {
+                        wgpu::TextureFormat::Etc2Rgba8Unorm
+                    }
+                }
+                Self::Astc => wgpu::TextureFormat::Astc {
+                    block: wgpu::AstcBlock::B4x4,
+                    channel: if srgb {
+                        wgpu::AstcChannel::UnormSrgb
+                    } else {
+                        wgpu::AstcChannel::Unorm
+                    },
+                },
+                Self::Rgba => {
+                    if srgb {
+                        wgpu::TextureFormat::Rgba8UnormSrgb
+                    } else {
+                        wgpu::TextureFormat::Rgba8Unorm
+                    }
+                }
+                Self::Bc7 => {
+                    if srgb {
+                        wgpu::TextureFormat::Bc7RgbaUnormSrgb
+                    } else {
+                        wgpu::TextureFormat::Bc7RgbaUnorm
+                    }
+                }
+            }
+        }
+    }
+
+    file.close();
+    file.delete();
+
+    let format = format.as_wgpu(srgb);
+
+    device.create_owned_texture_resource(device.inner.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: num_levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        },
+        &transcoded_data,
+    ))
 }
 
 fn load_ktx2(device: &Device, queue: &wgpu::Queue, bytes: &[u8]) -> Resource<Texture> {
@@ -398,14 +535,11 @@ fn load_ktx2(device: &Device, queue: &wgpu::Queue, bytes: &[u8]) -> Resource<Tex
 
     for dfd in ktx2.data_format_descriptors() {
         if dfd.header == ktx2::DataFormatDescriptorHeader::BASIC {
-            let basic_data_format_descriptor =
-                ktx2::BasicDataFormatDescriptor::parse(dfd.data).unwrap();
-
-            log::info!("{:?}", basic_data_format_descriptor.color_model);
+            let basic_dfd = ktx2::BasicDataFormatDescriptor::parse(dfd.data).unwrap();
+            let sample_information: Vec<_> = basic_dfd.sample_information().collect();
+            log::info!("{:?} {:?}", basic_dfd.color_model, sample_information);
         }
     }
-
-    log::info!("{:?} {:?}", levels.len(), header);
 
     todo!();
 }
@@ -444,7 +578,7 @@ fn load_standard_image_format(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
     };
 
     // This is unfortunately the only way I could get mipmaps working as you can only write
@@ -528,6 +662,23 @@ pub fn load_single_pixel_image(
     )
 }
 
+fn response_body_async_reader(response: web_sys::Response) -> impl futures::io::AsyncRead {
+    use futures::{AsyncReadExt, StreamExt, TryStreamExt};
+
+    let js_stream = wasm_streams::ReadableStream::from_raw(
+        wasm_bindgen::JsValue::from(response.body().unwrap()).into(),
+    );
+
+    js_stream
+        .into_stream()
+        .map(|value| {
+            let array: js_sys::Uint8Array = value.unwrap().into();
+            let vec = array.to_vec();
+            Ok(vec)
+        })
+        .into_async_read()
+}
+
 async fn fetch_bytes(url: &url::Url) -> Vec<u8> {
     let response: web_sys::Response = wasm_bindgen_futures::JsFuture::from(
         web_sys::window().unwrap().fetch_with_str(url.as_str()),
@@ -539,17 +690,21 @@ async fn fetch_bytes(url: &url::Url) -> Vec<u8> {
     let length = response.headers().get("content-length").unwrap().unwrap();
     let length: u64 = length.parse().unwrap();
 
-    log::info!("Size in MB: {}", length as f32 / 1024.0 / 1024.0);
+    log::info!(
+        "Fetching {}. Size in MB: {}",
+        url,
+        length as f32 / 1024.0 / 1024.0
+    );
 
-    let array_buffer: js_sys::ArrayBuffer =
-        wasm_bindgen_futures::JsFuture::from(response.array_buffer().unwrap())
-            .await
-            .unwrap()
-            .into();
+    use futures::AsyncReadExt;
 
-    let uint8_buffer = js_sys::Uint8Array::new(&array_buffer);
+    let mut async_read = response_body_async_reader(response);
 
-    uint8_buffer.to_vec()
+    let mut buf = Vec::new();
+
+    async_read.read_to_end(&mut buf).await.unwrap();
+
+    buf
 }
 
 pub type FetchedImages = std::collections::HashMap<url::Url, (Arc<Resource<Texture>>, bool)>;
