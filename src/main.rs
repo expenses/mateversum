@@ -395,11 +395,15 @@ async fn run() {
             let data: js_sys::ArrayBuffer = ev.data().into();
             let uint8 = js_sys::Uint8Array::new(&data);
             let bytes = uint8.to_vec();
-            // Bytemuck panics with an alignment error if we try and cast to an instance.
-            let floats: &[f32] = bytemuck::cast_slice(&bytes);
-            instances_clone.borrow_mut()[5] = Instance::from_slice(floats);
-            instances_clone.borrow_mut()[3] = Instance::from_slice(&floats[8..]);
-            instances_clone.borrow_mut()[4] = Instance::from_slice(&floats[16..]);
+            if !bytes.is_empty() {
+                // Bytemuck panics with an alignment error if we try and cast to an instance.
+                let instances: &[Instance] = cast_slice(&bytes);
+                instances_clone.borrow_mut()[5] = instances[0];
+                instances_clone.borrow_mut()[3] = instances[1];
+                instances_clone.borrow_mut()[4] = instances[2];
+            } else {
+                log::info!("Got {} bytes; ignoring", bytes.len());
+            }
         })
             as Box<dyn FnMut(u32, web_sys::MessageEvent)>);
 
@@ -531,14 +535,10 @@ async fn run() {
 
             // Send the head transform to remotes.
             {
-                let mut head_transform = Instance::from_transform(pose.transform(), 0.35);
+                let mut head_transform = Instance::from_transform(pose.transform(), 0.5);
                 head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
-                let mut array = [0.0; 24];
-                head_transform.write_to_slice(&mut array);
-                // Write hands.
-                instances.borrow()[1].write_to_slice(&mut array[8..]);
-                instances.borrow()[2].write_to_slice(&mut array[16..]);
-                let bytes = bytemuck::bytes_of(&array);
+                let instances = [head_transform, instances.borrow()[1], instances.borrow()[2]];
+                let bytes = bytemuck::cast_slice(&instances);
 
                 let uint8 = unsafe { js_sys::Uint8Array::view(bytes) };
 
@@ -847,20 +847,6 @@ impl Instance {
         instance
     }
 
-    pub fn write_to_slice(&self, slice: &mut [f32]) {
-        self.position.write_to_slice(slice);
-        slice[3] = self.scale;
-        self.rotation.write_to_slice(&mut slice[4..]);
-    }
-
-    pub fn from_slice(slice: &[f32]) -> Self {
-        Self::new(
-            Vec3::from_slice(slice),
-            slice[3],
-            glam::Quat::from_slice(&slice[4..]),
-        )
-    }
-
     pub fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
         let position = transform.position();
         let rotation = transform.orientation();
@@ -922,4 +908,13 @@ impl ResizingBuffer {
 pub struct LineVertex {
     pub position: Vec3,
     pub colour: Vec3,
+}
+
+fn cast_slice<F, T>(slice: &[F]) -> &[T] {
+    unsafe {
+        std::slice::from_raw_parts(
+            slice.as_ptr() as *const T,
+            (slice.len() * std::mem::size_of::<F>()) / std::mem::size_of::<T>(),
+        )
+    }
 }
