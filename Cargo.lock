@@ -61,6 +61,7 @@ checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 [[package]]
 name = "basis-universal-wasm"
 version = "0.1.0"
+source = "git+https://github.com/expenses/basis-universal-rs-wasm#6e222197941f29e461c6277af02bcd7b9f06d446"
 dependencies = [
  "js-sys",
  "once_cell",
@@ -698,6 +699,7 @@ dependencies = [
 [[package]]
 name = "gltf-helpers"
 version = "0.1.0"
+source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#3b68ead97acc16b80ef04cd3a286be41f5c6129d"
 dependencies = [
  "bytemuck",
  "glam",
@@ -940,6 +942,7 @@ dependencies = [
 [[package]]
 name = "kiss-engine-wgpu"
 version = "0.1.0"
+source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#3b68ead97acc16b80ef04cd3a286be41f5c6129d"
 dependencies = [
  "elsa",
  "log",
@@ -1997,6 +2000,7 @@ dependencies = [
 [[package]]
 name = "wasm-web-helpers"
 version = "0.1.0"
+source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#3b68ead97acc16b80ef04cd3a286be41f5c6129d"
 dependencies = [
  "web-sys",
  "winit",
@@ -2005,6 +2009,7 @@ dependencies = [
 [[package]]
 name = "wasm-webxr-helpers"
 version = "0.1.0"
+source = "git+https://github.com/expenses/wasm-webxr-helpers#697b72c36da579d0556d1467bf8333088f4b1034"
 dependencies = [
  "js-sys",
  "raw-window-handle",
@@ -2131,6 +2136,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-anisotrophy#eccbac33fc459666039fea95b30d523b4a281b8c"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -2150,6 +2156,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-anisotrophy#eccbac33fc459666039fea95b30d523b4a281b8c"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -2171,6 +2178,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-anisotrophy#eccbac33fc459666039fea95b30d523b4a281b8c"
 dependencies = [
  "arrayvec",
  "ash",
@@ -2207,6 +2215,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-anisotrophy#eccbac33fc459666039fea95b30d523b4a281b8c"
 dependencies = [
  "bitflags",
 ]

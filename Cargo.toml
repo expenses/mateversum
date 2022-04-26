@@ -6,14 +6,14 @@ edition = "2021"
 [dependencies]
 console_error_panic_hook = "0.1.7"
 console_log = "0.2.0"
-wasm-web-helpers = { path = "../kiss-engine-vr/wasm-web-helpers" }
+wasm-web-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 log = "0.4.16"
 wasm-bindgen-futures = "0.4.30"
 wgpu = { version = "0.12.0", features = ["webgl"] }
 futures = "0.3.21"
-kiss-engine-wgpu = { path = "../kiss-engine-vr/kiss-engine-wgpu", features = ["standalone"] }
+kiss-engine-wgpu = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw", features = ["standalone"] }
 gltf = "1.0.0"
-gltf-helpers = { path = "../kiss-engine-vr/gltf-helpers" }
+gltf-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 glam = "0.20.5"
 bytemuck = { version = "1.9.1", features = ["derive"] }
 image = { version = "0.24.1", default-features = false, features = ["jpeg", "png"] }
@@ -29,8 +29,8 @@ crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
 wasm-bindgen = "0.2.80"
 wasm-streams = "0.2.2"
 
-wasm-webxr-helpers = { path = "../wasm-webxr-helpers" }
-basis-universal-wasm = { path = "../basis-universal-rs-wasm" }
+wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
+basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-wasm" }
 
 [dependencies.web-sys]
 version = "0.3.36"
@@ -94,8 +94,8 @@ wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "web
 wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-framebuffer" }
-wgpu = { path = "../../wgpu/wgpu" }
-wgpu-hal = { path = "../../wgpu/wgpu-hal" }
+wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr-anisotrophy" }
+wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-anisotrophy" }
 
 [workspace]
 members = [
