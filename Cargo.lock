@@ -662,6 +662,7 @@ dependencies = [
 [[package]]
 name = "glow"
 version = "0.11.2"
+source = "git+https://github.com/expenses/glow?branch=web-sys-bind-raw-framebuffer#a2c98d1fd5205b95ed5225af808a9a8598d267d4"
 dependencies = [
  "js-sys",
  "slotmap",

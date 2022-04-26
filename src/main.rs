@@ -370,6 +370,9 @@ async fn run() {
             instances.push(Instance::default());
             instances.push(Instance::default());
             instances.push(Instance::default());
+        } else if i == 2 {
+            instance_counts.push(1);
+            instances.push(Instance::scaled(0.01));
         } else {
             instance_counts.push(1);
             instances.push(Instance::default());
@@ -431,28 +434,30 @@ async fn run() {
             mapped_at_creation: false,
         }));
 
+    let mut line_verts = [
+        LineVertex {
+            position: -Vec3::ONE,
+            colour: Vec3::X,
+        },
+        LineVertex {
+            position: Vec3::ONE,
+            colour: Vec3::Y,
+        },
+        LineVertex {
+            position: Vec3::new(-1.0, 1.0, -1.0),
+            colour: Vec3::Z,
+        },
+        LineVertex {
+            position: -Vec3::new(-1.0, 1.0, -1.0),
+            colour: Vec3::ONE - Vec3::Z,
+        },
+    ];
+
     let line_buffer = device.create_resource(device.inner.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {
             label: Some("line buffer"),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
-            contents: bytemuck::cast_slice(&[
-                LineVertex {
-                    position: -Vec3::ONE,
-                    colour: Vec3::X,
-                },
-                LineVertex {
-                    position: Vec3::ONE,
-                    colour: Vec3::Y,
-                },
-                LineVertex {
-                    position: Vec3::new(-1.0, 1.0, -1.0),
-                    colour: Vec3::Z,
-                },
-                LineVertex {
-                    position: -Vec3::new(-1.0, 1.0, -1.0),
-                    colour: Vec3::ONE - Vec3::Z,
-                },
-            ]),
+            contents: bytemuck::cast_slice(&line_verts),
         },
     ));
 
@@ -472,7 +477,9 @@ async fn run() {
             if let Some(grip_space) = input_source.grip_space() {
                 let grip_pose = frame.get_pose(&grip_space, &reference_space).unwrap();
                 let transform = grip_pose.transform();
-                instances.borrow_mut()[i as usize + 1] = Instance::from_transform(transform, 1.0);
+                let instance = Instance::from_transform(transform, 1.0);
+                instances.borrow_mut()[i as usize + 1] = instance;
+                line_verts[i as usize * 2].position = instance.position;
             }
         }
 
@@ -565,6 +572,8 @@ async fn run() {
                 &queue,
                 bytemuck::cast_slice(&instances.borrow()),
             );
+
+            queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
         let framebuffer = base_layer.framebuffer();
@@ -830,6 +839,12 @@ impl Instance {
             scale,
             rotation,
         }
+    }
+
+    pub fn scaled(scale: f32) -> Self {
+        let mut instance = Self::default();
+        instance.scale = scale;
+        instance
     }
 
     pub fn write_to_slice(&self, slice: &mut [f32]) {
