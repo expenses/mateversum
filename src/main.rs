@@ -365,7 +365,9 @@ async fn run() {
         models.push(load_gltf_from_url(&url, &mut context).await);
         let mut instances = instances.borrow_mut();
         if i == 1 {
-            instance_counts.push(2);
+            instance_counts.push(4);
+            instances.push(Instance::default());
+            instances.push(Instance::default());
             instances.push(Instance::default());
             instances.push(Instance::default());
         } else {
@@ -392,7 +394,9 @@ async fn run() {
             let bytes = uint8.to_vec();
             // Bytemuck panics with an alignment error if we try and cast to an instance.
             let floats: &[f32] = bytemuck::cast_slice(&bytes);
-            instances_clone.borrow_mut()[3] = Instance::from_slice(floats);
+            instances_clone.borrow_mut()[5] = Instance::from_slice(floats);
+            instances_clone.borrow_mut()[3] = Instance::from_slice(&floats[8..]);
+            instances_clone.borrow_mut()[4] = Instance::from_slice(&floats[16..]);
         })
             as Box<dyn FnMut(u32, web_sys::MessageEvent)>);
 
@@ -522,7 +526,11 @@ async fn run() {
             {
                 let mut head_transform = Instance::from_transform(pose.transform(), 0.35);
                 head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
-                let array = head_transform.to_array();
+                let mut array = [0.0; 24];
+                head_transform.write_to_slice(&mut array);
+                // Write hands.
+                instances.borrow()[1].write_to_slice(&mut array[8..]);
+                instances.borrow()[2].write_to_slice(&mut array[16..]);
                 let bytes = bytemuck::bytes_of(&array);
 
                 let uint8 = unsafe { js_sys::Uint8Array::view(bytes) };
@@ -824,12 +832,10 @@ impl Instance {
         }
     }
 
-    pub fn to_array(&self) -> [f32; 8] {
-        let mut array = [0.0; 8];
-        self.position.write_to_slice(&mut array);
-        array[3] = self.scale;
-        self.rotation.write_to_slice(&mut array[4..]);
-        array
+    pub fn write_to_slice(&self, slice: &mut [f32]) {
+        self.position.write_to_slice(slice);
+        slice[3] = self.scale;
+        self.rotation.write_to_slice(&mut slice[4..]);
     }
 
     pub fn from_slice(slice: &[f32]) -> Self {
