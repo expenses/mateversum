@@ -88,7 +88,7 @@ async fn run() {
     let xr_session: web_sys::XrSession =
         wasm_bindgen_futures::JsFuture::from(xr.request_session_with_options(
             mode,
-            &web_sys::XrSessionInit::new().required_features(&required_features),
+            web_sys::XrSessionInit::new().required_features(&required_features),
         ))
         .await
         .unwrap()
@@ -351,7 +351,7 @@ async fn run() {
 
     let mut models = Vec::new();
 
-    let mut instances = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let instances = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let mut instance_counts = Vec::new();
 
     log::info!("urls: {:?}", model_urls);
@@ -359,7 +359,7 @@ async fn run() {
     for (i, model_url) in model_urls.iter().enumerate() {
         let url = url::Url::options()
             .base_url(Some(&href))
-            .parse(&model_url)
+            .parse(model_url)
             .unwrap();
 
         models.push(load_gltf_from_url(&url, &mut context).await);
@@ -374,32 +374,34 @@ async fn run() {
         }
     }
 
-    let channel: web_sys::RtcDataChannel =
-        js_sys::Reflect::get(&web_sys::window().unwrap(), &"sendChannel".into())
+    let setup_fn: js_sys::Function =
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"setReceiveMessage".into())
             .unwrap()
             .into();
-    web_sys::console::log_1(&channel);
 
     let send_fn: js_sys::Function =
-    js_sys::Reflect::get(&web_sys::window().unwrap(), &"sendMessage".into())
-        .unwrap()
-        .into();
-
-    web_sys::console::log_1(&send_fn);
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"sendMessage".into())
+            .unwrap()
+            .into();
 
     let instances_clone = instances.clone();
     let on_message =
-        wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::MessageEvent| {
+        wasm_bindgen::closure::Closure::wrap(Box::new(move |id: u32, ev: web_sys::MessageEvent| {
             let data: js_sys::ArrayBuffer = ev.data().into();
             let uint8 = js_sys::Uint8Array::new(&data);
             let bytes = uint8.to_vec();
+            // Bytemuck panics with an alignment error if we try and cast to an instance.
             let floats: &[f32] = bytemuck::cast_slice(&bytes);
-            //log::warn!("{:?}", floats);
-            //let transform: &Instance = bytemuck::from_bytes(&bytes);
             instances_clone.borrow_mut()[3] = Instance::from_slice(floats);
-        }) as Box<dyn FnMut(web_sys::MessageEvent)>);
+        })
+            as Box<dyn FnMut(u32, web_sys::MessageEvent)>);
 
-    channel.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    setup_fn
+        .call1(
+            &wasm_bindgen::JsValue::undefined(),
+            on_message.as_ref().unchecked_ref(),
+        )
+        .unwrap();
     // We need do this this as otherwise `on_message` is dropped when `run()` finishes.
     on_message.forget();
 
@@ -466,7 +468,7 @@ async fn run() {
             if let Some(grip_space) = input_source.grip_space() {
                 let grip_pose = frame.get_pose(&grip_space, &reference_space).unwrap();
                 let transform = grip_pose.transform();
-                instances.borrow_mut()[i as usize + 1] = Instance::from_transform(transform);
+                instances.borrow_mut()[i as usize + 1] = Instance::from_transform(transform, 1.0);
             }
         }
 
@@ -518,16 +520,16 @@ async fn run() {
 
             // Send the head transform to remotes.
             {
-                let mut head_transform = Instance::from_transform(pose.transform());
+                let mut head_transform = Instance::from_transform(pose.transform(), 0.35);
                 head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
                 let array = head_transform.to_array();
                 let bytes = bytemuck::bytes_of(&array);
 
-                let uint8 = unsafe {
-                    js_sys::Uint8Array::view(bytes)
-                };
+                let uint8 = unsafe { js_sys::Uint8Array::view(bytes) };
 
-                send_fn.call1(&wasm_bindgen::JsValue::undefined(), &&uint8);
+                send_fn
+                    .call1(&wasm_bindgen::JsValue::undefined(), &uint8)
+                    .unwrap();
             }
 
             if let Some(right_view) = views.get(1) {
@@ -834,11 +836,11 @@ impl Instance {
         Self::new(
             Vec3::from_slice(slice),
             slice[3],
-            glam::Quat::from_slice(&slice[4..])
+            glam::Quat::from_slice(&slice[4..]),
         )
     }
 
-    pub fn from_transform(transform: web_sys::XrRigidTransform) -> Self {
+    pub fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
         let position = transform.position();
         let rotation = transform.orientation();
 
@@ -848,7 +850,7 @@ impl Instance {
         Self {
             position: position.as_vec3(),
             rotation: rotation.as_f32(),
-            scale: 1.0,
+            scale,
         }
     }
 }

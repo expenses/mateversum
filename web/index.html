@@ -15,7 +15,9 @@
                 ],
             });
 
-            var udpLike = { ordered: false, maxRetransmits: 0 };
+            let udpLike = { ordered: false, maxRetransmits: 0 };
+
+            let channels_list = [];
 
             pc.oniceconnectionstatechange = (e) => console.log(pc.iceConnectionState);
             pc.onicecandidate = (event) => {
@@ -26,7 +28,7 @@
 
             pc.ondatachannel = (e) => {
               console.log(e);
-              window.sendChannel = e.channel;
+              setupChannel(e.channel);
             };
 
             pc.onnegotiationneeded = (e) =>
@@ -35,25 +37,47 @@
                     .then((d) => pc.setLocalDescription(d))
                     .catch(console.log);
 
+            let receiveMessage = (id, message) => {
+              console.log(id)
+            };
+
+            let setupChannel = (channel) => {
+              let id = channels_list.length;
+
+              channel.onclose = () => console.log("sendChannel has closed");
+              channel.onopen = () => console.log("sendChannel has opened");
+              channel.onerror = (error) => console.log(error);
+              channel.onmessage = (message) => {
+                receiveMessage(id, message);
+              };
+
+              channels_list.push(channel);
+            }
+
+            // Imported by wasm.
+            window.setReceiveMessage = (func) => {
+              receiveMessage = func;
+            }
+
+            // Imported by wasm. Should ideally broadcast to all connected peers.
             window.sendMessage = (uint8buf) => {
                 // https://stackoverflow.com/a/54646864
                 // a `Uint8Array.buffer` returns the whole buffer, which seems to be the whole wasm heap?
                 // So we need to slice it to the view we want. Not sure if we specifically need to do this or can just send
                 // the uint8array directly. Haven't tested it.
                 let ab = uint8buf.buffer.slice(uint8buf.byteOffset, uint8buf.byteLength + uint8buf.byteOffset);
-                //console.error(ab);
-                sendChannel.send(ab);
+
+                for (let i = 0; i < channels_list.length; i++) {
+                  channels_list[i].send(ab);
+                }
             };
 
-            window.is_dom = false;
+            let is_hosting = false;
 
-            window.dom = () => {
+            window.host = () => {
               let sendChannel = pc.createDataChannel("foo", udpLike);
-              sendChannel.onclose = () => console.log("sendChannel has closed");
-              sendChannel.onopen = () => console.log("sendChannel has opened");
-              sendChannel.onerror = (error) => console.log(error);
-              window.sendChannel = sendChannel;
-              window.is_dom = true;
+              setupChannel(sendChannel);
+              is_hosting = true;
             };
 
             window.startSession = async () => {
@@ -65,7 +89,7 @@
                 console.log("starting");
 
                 await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(atob(sd))));;
-                if (!window.is_dom) {
+                if (!is_hosting) {
                   let answer = await pc.createAnswer();
                   console.log(answer);
                   await pc.setLocalDescription(answer);
@@ -77,9 +101,9 @@
                 init();
             });
         </script>
-        Browser base64 Session Description <textarea id="localSessionDescription" readonly="true"></textarea> <br />
-        Golang base64 Session Description: <textarea id="remoteSessionDescription"></textarea> <br />
-        <button onclick="window.dom()">Dom</button> <br />
+        Local Session Description (base64, readonly): <textarea id="localSessionDescription" readonly="true"></textarea> <br />
+        Remote Session Description (base64): <textarea id="remoteSessionDescription"></textarea> <br />
+        <button onclick="window.host()">Host</button> <br />
         <button onclick="window.startSession()">Start</button> <br />
         <br />
     </body>
