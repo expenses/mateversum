@@ -380,21 +380,20 @@ async fn run() {
     }
 
     let setup_fn: js_sys::Function =
-        js_sys::Reflect::get(&web_sys::window().unwrap(), &"setReceiveMessage".into())
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())
             .unwrap()
             .into();
 
     let send_fn: js_sys::Function =
-        js_sys::Reflect::get(&web_sys::window().unwrap(), &"sendMessage".into())
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())
             .unwrap()
             .into();
 
     let instances_clone = instances.clone();
-    let on_message =
-        wasm_bindgen::closure::Closure::wrap(Box::new(move |id: u32, ev: web_sys::MessageEvent| {
-            let data: js_sys::ArrayBuffer = ev.data().into();
-            let uint8 = js_sys::Uint8Array::new(&data);
-            let bytes = uint8.to_vec();
+    let on_message = wasm_bindgen::closure::Closure::wrap(Box::new(
+        move |uint8: js_sys::Uint8Array, peer_index: u32| {
+            let mut bytes = [0; 96];
+            uint8.copy_to(&mut bytes);
             if !bytes.is_empty() {
                 // Bytemuck panics with an alignment error if we try and cast to an instance.
                 let instances: &[Instance] = cast_slice(&bytes);
@@ -404,8 +403,9 @@ async fn run() {
             } else {
                 log::info!("Got {} bytes; ignoring", bytes.len());
             }
-        })
-            as Box<dyn FnMut(u32, web_sys::MessageEvent)>);
+        },
+    )
+        as Box<dyn FnMut(js_sys::Uint8Array, u32)>);
 
     setup_fn
         .call1(
