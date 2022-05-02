@@ -1,3 +1,6 @@
 [submodule "web/glTF-Sample-Models"]
 	path = web/glTF-Sample-Models
 	url = https://github.com/KhronosGroup/glTF-Sample-Models
+[submodule "rust-gpu-cli-builder"]
+	path = rust-gpu-cli-builder
+	url = https://github.com/expenses/rust-gpu-cli-builder

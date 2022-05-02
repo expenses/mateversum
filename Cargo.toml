@@ -102,4 +102,5 @@ members = [
   ".",
   "shared-structs",
   "shaders",
+  "rust-gpu-cli-builder",
 ]

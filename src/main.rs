@@ -744,7 +744,7 @@ async fn run() {
                 instance_offset += instance_counts[model_index];
             }
 
-            //render_pass.set_pipeline(&pbr_alpha_clipped_pipeline.pipeline);
+            render_pass.set_pipeline(&pbr_alpha_clipped_pipeline.pipeline);
 
             let mut instance_offset = 0;
 
