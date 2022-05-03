@@ -1,19 +1,20 @@
 use crevice::std140::AsStd140;
 use glam::{Vec2, Vec3};
 use kiss_engine_wgpu::{BindingResource, Device, RenderPipeline, Resource, Texture};
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
-pub struct ModelLoadContext<'a> {
-    pub device: &'a Device,
-    pub queue: &'a wgpu::Queue,
-    pub fetched_images: &'a mut FetchedImages,
-    pub pbr_alpha_clipped_pipeline: &'a RenderPipeline,
-    pub pbr_pipeline: &'a RenderPipeline,
-    pub black_image: Arc<Resource<Texture>>,
-    pub white_image: Arc<Resource<Texture>>,
-    pub flat_normals_image: Arc<Resource<Texture>>,
-    pub default_metallic_roughness_image: Arc<Resource<Texture>>,
+pub struct ModelLoadContext {
+    pub device: Rc<RefCell<Device>>,
+    pub queue: Rc<wgpu::Queue>,
+    pub fetched_images: Rc<RefCell<FetchedImages>>,
+    pub pbr_alpha_clipped_pipeline: Rc<RenderPipeline>,
+    pub pbr_pipeline: Rc<RenderPipeline>,
+    pub black_image: Rc<Resource<Texture>>,
+    pub white_image: Rc<Resource<Texture>>,
+    pub flat_normals_image: Rc<Resource<Texture>>,
+    pub default_metallic_roughness_image: Rc<Resource<Texture>>,
     pub supported_features: wgpu::Features,
 }
 
@@ -23,10 +24,10 @@ struct ModelBuffers<'a> {
 }
 
 struct MaterialTextures {
-    normal_texture: Arc<Resource<Texture>>,
-    albedo_texture: Arc<Resource<Texture>>,
-    metallic_roughness_texture: Arc<Resource<Texture>>,
-    emissive_texture: Arc<Resource<Texture>>,
+    normal_texture: Rc<Resource<Texture>>,
+    albedo_texture: Rc<Resource<Texture>>,
+    metallic_roughness_texture: Rc<Resource<Texture>>,
+    emissive_texture: Rc<Resource<Texture>>,
 }
 
 pub struct ModelPrimitive {
@@ -36,7 +37,7 @@ pub struct ModelPrimitive {
     pub uvs: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
     pub num_indices: u32,
-    // We hold handles onto the used textures here, so that when the model is dropped, the `Arc::strong_count`
+    // We hold handles onto the used textures here, so that when the model is dropped, the `Rc::strong_count`
     // of the textures goes down. Then we are able to unload the textures from GPU memory by `HashMap::retain`ing the fetched images..
     _textures: MaterialTextures,
 }
@@ -52,13 +53,15 @@ struct StagingModelPrimitive {
 
 impl StagingModelPrimitive {
     fn upload(self, context: &ModelLoadContext, alpha_clipped: bool) -> ModelPrimitive {
+        let device = context.device.borrow();
+
         ModelPrimitive {
-            bind_group: context.device.create_owned_bind_group(
+            bind_group: device.create_owned_bind_group(
                 None,
                 if alpha_clipped {
-                    context.pbr_alpha_clipped_pipeline
+                    &context.pbr_alpha_clipped_pipeline
                 } else {
-                    context.pbr_pipeline
+                    &context.pbr_pipeline
                 },
                 1,
                 &[
@@ -70,32 +73,28 @@ impl StagingModelPrimitive {
                 ],
             ),
             num_indices: self.indices.len() as u32,
-            indices: context
-                .device
+            indices: device
                 .inner
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("indices"),
                     contents: bytemuck::cast_slice(&self.indices),
                     usage: wgpu::BufferUsages::INDEX,
                 }),
-            positions: context
-                .device
+            positions: device
                 .inner
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("positions"),
                     contents: bytemuck::cast_slice(&self.positions),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-            normals: context
-                .device
+            normals: device
                 .inner
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("normals"),
                     contents: bytemuck::cast_slice(&self.normals),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-            uvs: context
-                .device
+            uvs: device
                 .inner
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("uvs"),
@@ -107,12 +106,13 @@ impl StagingModelPrimitive {
     }
 }
 
+#[derive(Default)]
 pub struct Model {
     pub opaque_primitives: Vec<ModelPrimitive>,
     pub alpha_clipped_primitives: Vec<ModelPrimitive>,
 }
 
-pub async fn load_gltf_from_url(url: &url::Url, context: &mut ModelLoadContext<'_>) -> Model {
+pub async fn load_gltf_from_url(url: &url::Url, context: &ModelLoadContext) -> Model {
     let bytes = fetch_bytes(url).await;
     load_gltf_from_bytes(&bytes, Some(url), context).await
 }
@@ -120,7 +120,7 @@ pub async fn load_gltf_from_url(url: &url::Url, context: &mut ModelLoadContext<'
 pub async fn load_gltf_from_bytes(
     bytes: &[u8],
     base_url: Option<&url::Url>,
-    context: &mut ModelLoadContext<'_>,
+    context: &ModelLoadContext,
 ) -> Model {
     let gltf = gltf::Gltf::from_slice(bytes).unwrap();
 
@@ -178,8 +178,8 @@ pub async fn load_gltf_from_bytes(
                         positions: Default::default(),
                         normals: Default::default(),
                         uvs: Default::default(),
-                        material_settings: context.device.create_resource(
-                            context.device.inner.create_buffer_init(
+                        material_settings: context.device.borrow().create_resource(
+                            context.device.borrow().inner.create_buffer_init(
                                 &wgpu::util::BufferInitDescriptor {
                                     label: Some("material settings"),
                                     contents: bytemuck::bytes_of(
@@ -306,9 +306,9 @@ async fn load_image_from_gltf(
     texture: &gltf::Texture<'_>,
     srgb: bool,
     buffers: &ModelBuffers<'_>,
-    context: &mut ModelLoadContext<'_>,
+    context: &ModelLoadContext,
     base_url: Option<&url::Url>,
-) -> Arc<Resource<Texture>> {
+) -> Rc<Resource<Texture>> {
     let image = texture.source();
 
     match image.source() {
@@ -327,7 +327,7 @@ async fn load_image_from_gltf(
 
             let bytes = &buffer[view.offset()..view.offset() + view.length()];
 
-            Arc::new(load_image_from_mime_type(context, bytes, srgb, Some(mime_type)).await)
+            Rc::new(load_image_from_mime_type(context, bytes, srgb, Some(mime_type)).await)
         }
         gltf::image::Source::Uri { uri, mime_type } => {
             let url = url::Url::options().base_url(base_url).parse(uri).unwrap();
@@ -335,13 +335,14 @@ async fn load_image_from_gltf(
             if url.scheme() == "data" {
                 let (_mime_type, data) = url.path().split_once(',').unwrap();
 
-                Arc::new(load_standard_image_format(
-                    context.device,
+                Rc::new(load_standard_image_format(
+                    &context.device,
+                    &context.queue,
                     &base64::decode(data).unwrap(),
                     srgb,
                 ))
             } else {
-                if let Some((image, cached_srgb)) = context.fetched_images.get(&url) {
+                if let Some((image, cached_srgb)) = context.fetched_images.borrow().get(&url) {
                     if *cached_srgb == srgb {
                         return image.clone();
                     } else {
@@ -355,9 +356,12 @@ async fn load_image_from_gltf(
                 let bytes = fetch_bytes(&url).await;
 
                 let image =
-                    Arc::new(load_image_from_mime_type(context, &bytes, srgb, mime_type).await);
+                    Rc::new(load_image_from_mime_type(context, &bytes, srgb, mime_type).await);
 
-                context.fetched_images.insert(url, (image.clone(), srgb));
+                context
+                    .fetched_images
+                    .borrow_mut()
+                    .insert(url, (image.clone(), srgb));
 
                 image
             }
@@ -366,28 +370,28 @@ async fn load_image_from_gltf(
 }
 
 async fn load_image_from_mime_type(
-    context: &ModelLoadContext<'_>,
+    context: &ModelLoadContext,
     bytes: &[u8],
     srgb: bool,
     mime_type: Option<&str>,
 ) -> Resource<Texture> {
     if mime_type == Some("image/ktx2") {
-        load_ktx2(context.device, context.queue, bytes)
+        load_ktx2(&context.device, &context.queue, bytes)
     } else if mime_type == Some("image/x.basis") {
         load_basis(
-            context.device,
-            context.queue,
+            &context.device,
+            &context.queue,
             context.supported_features,
             bytes,
             srgb,
         )
     } else {
-        load_standard_image_format(context.device, bytes, srgb)
+        load_standard_image_format(&context.device, &context.queue, bytes, srgb)
     }
 }
 
 fn load_basis(
-    device: &Device,
+    device: &Rc<RefCell<Device>>,
     queue: &wgpu::Queue,
     supported_features: wgpu::Features,
     bytes: &[u8],
@@ -488,6 +492,8 @@ fn load_basis(
 
     let format = format.as_wgpu(srgb);
 
+    let device = device.borrow();
+
     device.create_owned_texture_resource(device.inner.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
@@ -507,7 +513,7 @@ fn load_basis(
     ))
 }
 
-fn load_ktx2(device: &Device, queue: &wgpu::Queue, bytes: &[u8]) -> Resource<Texture> {
+fn load_ktx2(device: &Rc<RefCell<Device>>, queue: &wgpu::Queue, bytes: &[u8]) -> Resource<Texture> {
     let ktx2 = ktx2::Reader::new(bytes).unwrap();
     let header = ktx2.header();
     let mut levels = Vec::new();
@@ -545,7 +551,8 @@ fn load_ktx2(device: &Device, queue: &wgpu::Queue, bytes: &[u8]) -> Resource<Tex
 }
 
 fn load_standard_image_format(
-    device: &Device,
+    device: &Rc<RefCell<Device>>,
+    queue: &wgpu::Queue,
     format_bytes: &[u8],
     srgb: bool,
 ) -> Resource<Texture> {
@@ -553,86 +560,32 @@ fn load_standard_image_format(
 
     let image = image.to_rgba8();
 
-    let format = if srgb {
-        wgpu::TextureFormat::Rgba8UnormSrgb
-    } else {
-        wgpu::TextureFormat::Rgba8Unorm
-    };
-
-    let internal_format = if srgb {
-        glow::SRGB8_ALPHA8
-    } else {
-        glow::RGBA8
-    };
-
     let mip_level_count = mip_levels_for_image_size(image.width(), image.height());
 
-    let texture_descriptor = &wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: image.width(),
-            height: image.height(),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-    };
-
-    // This is unfortunately the only way I could get mipmaps working as you can only write
-    // to the 0th mip.
-    let texture = unsafe {
-        device.inner.as_hal::<wgpu_hal::gles::Api, _, _>(|device| {
-            let device = device.unwrap();
-            let gl_context = device.gl_context();
-
-            use glow::HasContext;
-
-            let texture = gl_context.create_texture().unwrap();
-            gl_context.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl_context.tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                internal_format as i32,
-                image.width() as i32,
-                image.height() as i32,
-                0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                Some(&*image),
-            );
-            gl_context.generate_mipmap(glow::TEXTURE_2D);
-            gl_context.bind_texture(glow::TEXTURE_2D, None);
-            texture
-        })
-    };
-
-    device.create_owned_texture_resource(unsafe {
-        device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
-            wgpu_hal::gles::Texture {
-                inner: wgpu_hal::gles::TextureInner::Texture {
-                    raw: texture,
-                    target: glow::TEXTURE_2D,
-                },
-                mip_level_count: 1,
-                array_layer_count: 1,
-                format,
-                format_desc: wgpu_hal::gles::TextureFormatDesc {
-                    internal: internal_format,
-                    external: glow::RGBA,
-                    data_type: glow::UNSIGNED_BYTE,
-                },
-                copy_size: wgpu_hal::CopyExtent {
+    device
+        .borrow()
+        .create_owned_texture_resource(create_texture_with_first_mip_data(
+            &device.borrow().inner,
+            queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
                     width: image.width(),
                     height: image.height(),
-                    depth: 1,
+                    depth_or_array_layers: 1,
                 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: if srgb {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                },
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
             },
-            texture_descriptor,
-        )
-    })
+            &*image,
+        ))
 }
 
 pub fn load_single_pixel_image(
@@ -640,8 +593,8 @@ pub fn load_single_pixel_image(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     bytes: &[u8; 4],
-) -> Arc<Resource<Texture>> {
-    Arc::new(
+) -> Rc<Resource<Texture>> {
+    Rc::new(
         device.create_owned_texture_resource(device.inner.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {
@@ -707,7 +660,7 @@ async fn fetch_bytes(url: &url::Url) -> Vec<u8> {
     buf
 }
 
-pub type FetchedImages = std::collections::HashMap<url::Url, (Arc<Resource<Texture>>, bool)>;
+pub type FetchedImages = std::collections::HashMap<url::Url, (Rc<Resource<Texture>>, bool)>;
 
 pub fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
     let mut removed = 0;
@@ -717,7 +670,7 @@ pub fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
         // it should be 2: the model + the one in this map. If less than 2
         // (it's normally impossible for strong_count to return 1 but w/e)
         // then we can drop it.
-        if Arc::strong_count(texture_ref) < 2 {
+        if Rc::strong_count(texture_ref) < 2 {
             removed += 1;
             false
         } else {
@@ -732,7 +685,6 @@ fn mip_levels_for_image_size(width: u32, height: u32) -> u32 {
     (width.max(height) as f32).log2() as u32 + 1
 }
 
-/*
 // Like the following, except without trying to write subsequent mips.
 // https://github.com/gfx-rs/wgpu/blob/0b61a191244da0f0d987d53614a6698097a7622f/wgpu/src/util/device.rs#L79-L146
 fn create_texture_with_first_mip_data(
@@ -786,4 +738,3 @@ fn create_texture_with_first_mip_data(
 
     texture
 }
-*/
