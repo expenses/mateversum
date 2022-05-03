@@ -411,7 +411,7 @@ async fn run() {
             let models = models.clone();
             let context = context.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let model = load_gltf_from_url(&url, &context).await;
+                let model = load_gltf_from_url(url, context).await;
                 models.borrow_mut()[i] = model;
             });
         }
@@ -777,7 +777,7 @@ async fn run() {
             let mut instance_offset = 0;
 
             for (model_index, model) in models.iter().enumerate() {
-                for primitive in &model.opaque_primitives {
+                for primitive in model.opaque_primitives.iter() {
                     render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
                     render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
                     render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
@@ -813,7 +813,7 @@ async fn run() {
             let mut instance_offset = 0;
 
             for (model_index, model) in models.iter().enumerate() {
-                for primitive in &model.alpha_clipped_primitives {
+                for primitive in model.alpha_clipped_primitives.iter() {
                     render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
                     render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
                     render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));

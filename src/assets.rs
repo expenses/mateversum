@@ -19,9 +19,8 @@ pub struct ModelLoadContext {
     pub supported_features: wgpu::Features,
 }
 
-struct ModelBuffers<'a> {
+struct ModelBuffers {
     map: std::collections::HashMap<usize, Vec<u8>>,
-    blob: Option<&'a Vec<u8>>,
 }
 
 struct MaterialTextures {
@@ -43,38 +42,49 @@ pub struct ModelPrimitive {
     _textures: MaterialTextures,
 }
 
-struct StagingModelPrimitive<'a> {
+struct StagingModelPrimitive {
     indices: Vec<u32>,
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     uvs: Vec<Vec2>,
-    material: gltf::Material<'a>,
+    material_index: usize,
     material_settings: wgpu::Buffer,
 }
 
-impl<'a> StagingModelPrimitive<'a> {
+impl StagingModelPrimitive {
     async fn upload(
         self,
+        gltf: &gltf::Gltf,
         context: &ModelLoadContext,
-        buffers: &ModelBuffers<'_>,
-        base_url: Option<&url::Url>,
+        buffers: &ModelBuffers,
+        base_url: Option<url::Url>,
     ) -> ModelPrimitive {
-        let pbr = self.material.pbr_metallic_roughness();
+        let material = gltf.materials().nth(self.material_index).unwrap();
+
+        let pbr = material.pbr_metallic_roughness();
 
         let textures = MaterialTextures {
             albedo_texture: if let Some(albedo_texture) = pbr.base_color_texture() {
-                load_image_from_gltf(&albedo_texture.texture(), true, &buffers, context, base_url)
-                    .await
+                load_image_from_gltf(
+                    gltf,
+                    &albedo_texture.texture(),
+                    true,
+                    buffers,
+                    context,
+                    base_url.as_ref(),
+                )
+                .await
             } else {
                 context.white_image.clone()
             },
-            normal_texture: if let Some(normal_texture) = self.material.normal_texture() {
+            normal_texture: if let Some(normal_texture) = material.normal_texture() {
                 load_image_from_gltf(
+                    gltf,
                     &normal_texture.texture(),
                     false,
-                    &buffers,
+                    buffers,
                     context,
-                    base_url,
+                    base_url.as_ref(),
                 )
                 .await
             } else {
@@ -84,23 +94,25 @@ impl<'a> StagingModelPrimitive<'a> {
                 pbr.metallic_roughness_texture()
             {
                 load_image_from_gltf(
+                    gltf,
                     &metallic_roughness_texture.texture(),
                     false,
-                    &buffers,
+                    buffers,
                     context,
-                    base_url,
+                    base_url.as_ref(),
                 )
                 .await
             } else {
                 context.default_metallic_roughness_image.clone()
             },
-            emissive_texture: if let Some(emissive_texture) = self.material.emissive_texture() {
+            emissive_texture: if let Some(emissive_texture) = material.emissive_texture() {
                 load_image_from_gltf(
+                    gltf,
                     &emissive_texture.texture(),
                     true,
-                    &buffers,
+                    buffers,
                     context,
-                    base_url,
+                    base_url.as_ref(),
                 )
                 .await
             } else {
@@ -181,24 +193,23 @@ impl<'a> StagingModelPrimitive<'a> {
 
 #[derive(Default)]
 pub struct Model {
-    pub opaque_primitives: Vec<ModelPrimitive>,
-    pub alpha_clipped_primitives: Vec<ModelPrimitive>,
+    pub opaque_primitives: Rc<elsa::FrozenVec<Box<ModelPrimitive>>>,
+    pub alpha_clipped_primitives: Rc<elsa::FrozenVec<Box<ModelPrimitive>>>,
 }
 
-pub async fn load_gltf_from_url(url: &url::Url, context: &ModelLoadContext) -> Model {
-    let bytes = fetch_bytes(url).await;
+pub async fn load_gltf_from_url(url: url::Url, context: Rc<ModelLoadContext>) -> Model {
+    let bytes = fetch_bytes(&url).await;
     load_gltf_from_bytes(&bytes, Some(url), context).await
 }
 
 pub async fn load_gltf_from_bytes(
     bytes: &[u8],
-    base_url: Option<&url::Url>,
-    context: &ModelLoadContext,
+    base_url: Option<url::Url>,
+    context: Rc<ModelLoadContext>,
 ) -> Model {
     let gltf = gltf::Gltf::from_slice(bytes).unwrap();
 
     let mut buffers = ModelBuffers {
-        blob: gltf.blob.as_ref(),
         map: Default::default(),
     };
 
@@ -208,7 +219,10 @@ pub async fn load_gltf_from_bytes(
         match buffer.source() {
             gltf::buffer::Source::Bin => {}
             gltf::buffer::Source::Uri(uri) => {
-                let url = url::Url::options().base_url(base_url).parse(uri).unwrap();
+                let url = url::Url::options()
+                    .base_url(base_url.as_ref())
+                    .parse(uri)
+                    .unwrap();
 
                 if url.scheme() == "data" {
                     let (mime_type, data) = url.path().split_once(',').unwrap();
@@ -266,13 +280,13 @@ pub async fn load_gltf_from_bytes(
                                 usage: wgpu::BufferUsages::UNIFORM,
                             },
                         ),
-                        material,
+                        material_index: material.index().unwrap_or(0),
                     })
                 }
             };
 
             let reader = primitive.reader(|buffer| match buffer.source() {
-                gltf::buffer::Source::Bin => Some(buffers.blob.unwrap()),
+                gltf::buffer::Source::Bin => Some(gltf.blob.as_ref().unwrap()),
                 gltf::buffer::Source::Uri(_) => {
                     buffers.map.get(&buffer.index()).map(|vec| &vec[..])
                 }
@@ -307,15 +321,34 @@ pub async fn load_gltf_from_bytes(
         }
     }
 
-    let mut opaque_primitives_vec = Vec::with_capacity(opaque_primitives.len());
-    let mut alpha_clipped_primitives_vec = Vec::with_capacity(alpha_clipped_primitives.len());
+    let buffers = Rc::new(buffers);
+    let gltf = Rc::new(gltf);
+
+    let opaque_primitives_vec = Rc::new(elsa::FrozenVec::new());
+    let alpha_clipped_primitives_vec = Rc::new(elsa::FrozenVec::new());
 
     for primitive in opaque_primitives.into_values() {
-        opaque_primitives_vec.push(primitive.upload(context, &buffers, base_url).await);
+        let base_url = base_url.clone();
+        let context = context.clone();
+        let buffers = buffers.clone();
+        let opaque_primitives_vec = opaque_primitives_vec.clone();
+        let gltf = gltf.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let primitive = primitive.upload(&gltf, &context, &buffers, base_url).await;
+            opaque_primitives_vec.push(Box::new(primitive));
+        });
     }
 
     for primitive in alpha_clipped_primitives.into_values() {
-        alpha_clipped_primitives_vec.push(primitive.upload(context, &buffers, base_url).await);
+        let base_url = base_url.clone();
+        let context = context.clone();
+        let buffers = buffers.clone();
+        let alpha_clipped_primitives_vec = alpha_clipped_primitives_vec.clone();
+        let gltf = gltf.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let primitive = primitive.upload(&gltf, &context, &buffers, base_url).await;
+            alpha_clipped_primitives_vec.push(Box::new(primitive));
+        })
     }
 
     Model {
@@ -325,9 +358,10 @@ pub async fn load_gltf_from_bytes(
 }
 
 async fn load_image_from_gltf(
+    gltf: &gltf::Gltf,
     texture: &gltf::Texture<'_>,
     srgb: bool,
-    buffers: &ModelBuffers<'_>,
+    buffers: &ModelBuffers,
     context: &ModelLoadContext,
     base_url: Option<&url::Url>,
 ) -> Rc<Texture> {
@@ -339,7 +373,7 @@ async fn load_image_from_gltf(
             let buffer = view.buffer();
 
             let buffer = match buffer.source() {
-                gltf::buffer::Source::Bin => buffers.blob.unwrap(),
+                gltf::buffer::Source::Bin => gltf.blob.as_ref().unwrap(),
                 gltf::buffer::Source::Uri(_) => buffers
                     .map
                     .get(&buffer.index())
