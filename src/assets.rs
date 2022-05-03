@@ -5,8 +5,6 @@ use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
 // TODO:
-// * Remove the use of the kiss engine device because the whole flushing thing sucks. Can use a shader/pipeline cache instead if needed.
-//
 // * Use blitting to have mipmap for standard textures.
 
 pub struct ModelLoadContext {
@@ -45,17 +43,71 @@ pub struct ModelPrimitive {
     _textures: MaterialTextures,
 }
 
-struct StagingModelPrimitive {
+struct StagingModelPrimitive<'a> {
     indices: Vec<u32>,
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     uvs: Vec<Vec2>,
-    textures: MaterialTextures,
+    material: gltf::Material<'a>,
     material_settings: wgpu::Buffer,
 }
 
-impl StagingModelPrimitive {
-    fn upload(self, context: &ModelLoadContext) -> ModelPrimitive {
+impl<'a> StagingModelPrimitive<'a> {
+    async fn upload(
+        self,
+        context: &ModelLoadContext,
+        buffers: &ModelBuffers<'_>,
+        base_url: Option<&url::Url>,
+    ) -> ModelPrimitive {
+        let pbr = self.material.pbr_metallic_roughness();
+
+        let textures = MaterialTextures {
+            albedo_texture: if let Some(albedo_texture) = pbr.base_color_texture() {
+                load_image_from_gltf(&albedo_texture.texture(), true, &buffers, context, base_url)
+                    .await
+            } else {
+                context.white_image.clone()
+            },
+            normal_texture: if let Some(normal_texture) = self.material.normal_texture() {
+                load_image_from_gltf(
+                    &normal_texture.texture(),
+                    false,
+                    &buffers,
+                    context,
+                    base_url,
+                )
+                .await
+            } else {
+                context.flat_normals_image.clone()
+            },
+            metallic_roughness_texture: if let Some(metallic_roughness_texture) =
+                pbr.metallic_roughness_texture()
+            {
+                load_image_from_gltf(
+                    &metallic_roughness_texture.texture(),
+                    false,
+                    &buffers,
+                    context,
+                    base_url,
+                )
+                .await
+            } else {
+                context.default_metallic_roughness_image.clone()
+            },
+            emissive_texture: if let Some(emissive_texture) = self.material.emissive_texture() {
+                load_image_from_gltf(
+                    &emissive_texture.texture(),
+                    true,
+                    &buffers,
+                    context,
+                    base_url,
+                )
+                .await
+            } else {
+                context.black_image.clone()
+            },
+        };
+
         ModelPrimitive {
             bind_group: context
                 .device
@@ -66,25 +118,25 @@ impl StagingModelPrimitive {
                         wgpu::BindGroupEntry {
                             binding: 0,
                             resource: wgpu::BindingResource::TextureView(
-                                &self.textures.albedo_texture.view,
+                                &textures.albedo_texture.view,
                             ),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
                             resource: wgpu::BindingResource::TextureView(
-                                &self.textures.normal_texture.view,
+                                &textures.normal_texture.view,
                             ),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
                             resource: wgpu::BindingResource::TextureView(
-                                &self.textures.metallic_roughness_texture.view,
+                                &textures.metallic_roughness_texture.view,
                             ),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
                             resource: wgpu::BindingResource::TextureView(
-                                &self.textures.emissive_texture.view,
+                                &textures.emissive_texture.view,
                             ),
                         },
                         wgpu::BindGroupEntry {
@@ -122,7 +174,7 @@ impl StagingModelPrimitive {
                     contents: bytemuck::cast_slice(&self.uvs),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-            _textures: self.textures,
+            _textures: textures,
         }
     }
 }
@@ -214,61 +266,7 @@ pub async fn load_gltf_from_bytes(
                                 usage: wgpu::BufferUsages::UNIFORM,
                             },
                         ),
-                        textures: MaterialTextures {
-                            albedo_texture: if let Some(albedo_texture) = pbr.base_color_texture() {
-                                load_image_from_gltf(
-                                    &albedo_texture.texture(),
-                                    true,
-                                    &buffers,
-                                    context,
-                                    base_url,
-                                )
-                                .await
-                            } else {
-                                context.white_image.clone()
-                            },
-                            normal_texture: if let Some(normal_texture) = material.normal_texture()
-                            {
-                                load_image_from_gltf(
-                                    &normal_texture.texture(),
-                                    false,
-                                    &buffers,
-                                    context,
-                                    base_url,
-                                )
-                                .await
-                            } else {
-                                context.flat_normals_image.clone()
-                            },
-                            metallic_roughness_texture: if let Some(metallic_roughness_texture) =
-                                pbr.metallic_roughness_texture()
-                            {
-                                load_image_from_gltf(
-                                    &metallic_roughness_texture.texture(),
-                                    false,
-                                    &buffers,
-                                    context,
-                                    base_url,
-                                )
-                                .await
-                            } else {
-                                context.default_metallic_roughness_image.clone()
-                            },
-                            emissive_texture: if let Some(emissive_texture) =
-                                material.emissive_texture()
-                            {
-                                load_image_from_gltf(
-                                    &emissive_texture.texture(),
-                                    true,
-                                    &buffers,
-                                    context,
-                                    base_url,
-                                )
-                                .await
-                            } else {
-                                context.black_image.clone()
-                            },
-                        },
+                        material,
                     })
                 }
             };
@@ -309,15 +307,20 @@ pub async fn load_gltf_from_bytes(
         }
     }
 
+    let mut opaque_primitives_vec = Vec::with_capacity(opaque_primitives.len());
+    let mut alpha_clipped_primitives_vec = Vec::with_capacity(alpha_clipped_primitives.len());
+
+    for primitive in opaque_primitives.into_values() {
+        opaque_primitives_vec.push(primitive.upload(context, &buffers, base_url).await);
+    }
+
+    for primitive in alpha_clipped_primitives.into_values() {
+        alpha_clipped_primitives_vec.push(primitive.upload(context, &buffers, base_url).await);
+    }
+
     Model {
-        opaque_primitives: opaque_primitives
-            .into_values()
-            .map(|primitive| primitive.upload(context))
-            .collect(),
-        alpha_clipped_primitives: alpha_clipped_primitives
-            .into_values()
-            .map(|primitive| primitive.upload(context))
-            .collect(),
+        opaque_primitives: opaque_primitives_vec,
+        alpha_clipped_primitives: alpha_clipped_primitives_vec,
     }
 }
 
@@ -578,6 +581,33 @@ fn load_standard_image_format(
     let image = image.to_rgba8();
 
     let mip_level_count = mip_levels_for_image_size(image.width(), image.height());
+
+    let format = if srgb {
+        wgpu::TextureFormat::Rgba8UnormSrgb
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    };
+
+    let blit_textures: Vec<_> = (1..mip_level_count)
+        .map(|i| {
+            let width = image.width() >> i;
+            let height = image.height() >> i;
+
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            })
+        })
+        .collect();
 
     Texture::new(create_texture_with_first_mip_data(
         device,

@@ -25,7 +25,7 @@ url = "2.2.2"
 ktx2 = "0.3.0"
 ruzstd = "0.2.4"
 crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
-wasm-bindgen = "0.2.80"
+wasm-bindgen = { version = "0.2.80", features = ["enable-interning"] }
 wasm-streams = "0.2.2"
 
 wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
@@ -94,8 +94,8 @@ wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "web
 wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-framebuffer" }
-wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr-anisotrophy" }
-wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-anisotrophy" }
+wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
+wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 
 [workspace]
 members = [
