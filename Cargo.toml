@@ -9,9 +9,8 @@ console_log = "0.2.0"
 wasm-web-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 log = "0.4.16"
 wasm-bindgen-futures = "0.4.30"
-wgpu = { version = "0.12.0", features = ["webgl"] }
+wgpu = { version = "0.12.0", features = ["webgl", "spirv"] }
 futures = "0.3.21"
-kiss-engine-wgpu = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw", features = ["standalone"] }
 gltf = "1.0.0"
 gltf-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 glam = "0.20.5"
@@ -31,6 +30,7 @@ wasm-streams = "0.2.2"
 
 wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
 basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-wasm" }
+elsa = "1.7.0"
 
 [dependencies.web-sys]
 version = "0.3.36"

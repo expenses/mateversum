@@ -1,7 +1,6 @@
 use crevice::std140::AsStd140;
 use futures::FutureExt;
 use glam::{Mat4, Vec3};
-use kiss_engine_wgpu::{BindingResource, Device, RenderPipelineDesc, ShaderSettings};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,6 +9,7 @@ use wasm_webxr_helpers::{button_click_future, create_button};
 use wgpu::util::DeviceExt;
 
 mod assets;
+mod caching;
 
 use assets::{
     load_gltf_from_url, load_single_pixel_image, prune_fetched_images, FetchedImages,
@@ -148,7 +148,7 @@ async fn run() {
         .await
         .expect("Unable to find a suitable GPU adapter!");
 
-    let device = Rc::new(RefCell::new(Device::new(device)));
+    let device = Rc::new(device);
     let queue = Rc::new(queue);
 
     let fetched_images = FetchedImages::default();
@@ -157,170 +157,201 @@ async fn run() {
         anisotrophic_filtering_level: Some(AnisotrophicFilteringLevel::L16),
     };
 
-    let linear_sampler = device.borrow().create_resource(
-        device
-            .borrow()
-            .inner
-            .create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
-                anisotropy_clamp: performance_settings
-                    .anisotrophic_filtering_level
-                    .map(|level| std::num::NonZeroU8::new(level as u8).unwrap()),
-                ..Default::default()
+    let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        anisotropy_clamp: performance_settings
+            .anisotrophic_filtering_level
+            .map(|level| std::num::NonZeroU8::new(level as u8).unwrap()),
+        ..Default::default()
+    });
+
+    let uniform_entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        count: None,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+    };
+
+    let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        count: None,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+    };
+
+    let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("uniform bind group layout"),
+        entries: &[
+            uniform_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                count: None,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            },
+        ],
+    });
+
+    let model_bgl = Rc::new(
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("model bind group layout"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                texture_entry(2),
+                texture_entry(3),
+                uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+            ],
+        }),
+    );
+
+    let model_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("model pipeline layout"),
+        bind_group_layouts: &[&uniform_bgl, &model_bgl],
+        push_constant_ranges: &[],
+    });
+
+    let vertex_buffers = &[
+        wgpu::VertexBufferLayout {
+            array_stride: 3 * 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 3 * 4,
+            attributes: &wgpu::vertex_attr_array![1 => Float32x3],
+            step_mode: wgpu::VertexStepMode::Vertex,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 2 * 4,
+            attributes: &wgpu::vertex_attr_array![2 => Float32x2],
+            step_mode: wgpu::VertexStepMode::Vertex,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 8 * 4,
+            attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4],
+            step_mode: wgpu::VertexStepMode::Instance,
+        },
+    ];
+
+    let shader_cache = caching::ResourceCache::default();
+
+    let vertex_state = wgpu::VertexState {
+        module: shader_cache.get("vertex", || {
+            device.create_shader_module(&wgpu::include_spirv!("../vertex.spv"))
+        }),
+        entry_point: "vertex",
+        buffers: vertex_buffers,
+    };
+
+    let pbr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("pbr pipeline"),
+        layout: Some(&model_pipeline_layout),
+        vertex: vertex_state.clone(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader_cache.get("fragment", || {
+                device.create_shader_module(&wgpu::include_spirv!("../fragment.spv"))
             }),
-    );
-
-    let pbr_pipeline = Rc::new(
-        kiss_engine_wgpu::create_render_pipeline_with_wgpu_vertex_buffer_layout(
-            &device.borrow().inner,
-            "pbr pipeline",
-            device.borrow().get_shader(
-                "vertex.spv",
-                include_bytes!("../vertex.spv"),
-                ShaderSettings {
-                    entry_point: "vertex",
-                    ..Default::default()
-                },
-            ),
-            device.borrow().get_shader(
-                "fragment.spv",
-                include_bytes!("../fragment.spv"),
-                ShaderSettings {
-                    entry_point: "fragment",
-                    ..Default::default()
-                },
-            ),
-            RenderPipelineDesc {
-                primitive: wgpu::PrimitiveState {
-                    // as we're flipping things in the shaders.
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..Default::default()
-                },
-                depth_compare: wgpu::CompareFunction::Less,
-                ..Default::default()
-            },
-            &[
-                wgpu::VertexBufferLayout {
-                    array_stride: 3 * 4,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: 3 * 4,
-                    attributes: &wgpu::vertex_attr_array![1 => Float32x3],
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: 2 * 4,
-                    attributes: &wgpu::vertex_attr_array![2 => Float32x2],
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: 8 * 4,
-                    attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4],
-                    step_mode: wgpu::VertexStepMode::Instance,
-                },
-            ],
-            &[wgpu::TextureFormat::Rgba8Unorm],
-            Some(wgpu::TextureFormat::Depth32Float),
-        ),
-    );
-
-    let pbr_alpha_clipped_pipeline = Rc::new(
-        kiss_engine_wgpu::create_render_pipeline_with_wgpu_vertex_buffer_layout(
-            &device.borrow().inner,
-            "pbr alpha clipped pipeline",
-            device.borrow().get_shader(
-                "vertex.spv",
-                include_bytes!("../vertex.spv"),
-                ShaderSettings {
-                    entry_point: "vertex",
-                    ..Default::default()
-                },
-            ),
-            device.borrow().get_shader(
-                "fragment_alpha_clipped.spv",
-                include_bytes!("../fragment_alpha_clipped.spv"),
-                ShaderSettings {
-                    entry_point: "fragment_alpha_clipped",
-                    ..Default::default()
-                },
-            ),
-            RenderPipelineDesc {
-                primitive: wgpu::PrimitiveState {
-                    // as we're flipping things in the shaders.
-                    cull_mode: Some(wgpu::Face::Front),
-                    ..Default::default()
-                },
-                depth_compare: wgpu::CompareFunction::Less,
-                ..Default::default()
-            },
-            &[
-                wgpu::VertexBufferLayout {
-                    array_stride: 3 * 4,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: 3 * 4,
-                    attributes: &wgpu::vertex_attr_array![1 => Float32x3],
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: 2 * 4,
-                    attributes: &wgpu::vertex_attr_array![2 => Float32x2],
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: 8 * 4,
-                    attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4],
-                    step_mode: wgpu::VertexStepMode::Instance,
-                },
-            ],
-            &[wgpu::TextureFormat::Rgba8Unorm],
-            Some(wgpu::TextureFormat::Depth32Float),
-        ),
-    );
-
-    let line_pipeline = kiss_engine_wgpu::create_render_pipeline_with_wgpu_vertex_buffer_layout(
-        &device.borrow().inner,
-        "line pipeline",
-        device.borrow().get_shader(
-            "line_vertex.spv",
-            include_bytes!("../line_vertex.spv"),
-            ShaderSettings {
-                entry_point: "line_vertex",
-                ..Default::default()
-            },
-        ),
-        device.borrow().get_shader(
-            "flat_colour.spv",
-            include_bytes!("../flat_colour.spv"),
-            ShaderSettings {
-                entry_point: "flat_colour",
-                ..Default::default()
-            },
-        ),
-        RenderPipelineDesc {
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_compare: wgpu::CompareFunction::Less,
+            entry_point: "fragment",
+            targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: Some(wgpu::Face::Front),
             ..Default::default()
         },
-        &[wgpu::VertexBufferLayout {
-            array_stride: 6 * 4,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-        }],
-        &[wgpu::TextureFormat::Rgba8Unorm],
-        Some(wgpu::TextureFormat::Depth32Float),
-    );
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: Default::default(),
+    });
+
+    let pbr_alpha_clipped_pipeline =
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pbr alpha clipped pipeline"),
+            layout: Some(&model_pipeline_layout),
+            vertex: vertex_state,
+            fragment: Some(wgpu::FragmentState {
+                module: shader_cache.get("fragment_alpha_clipped", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../fragment_alpha_clipped.spv"
+                    ))
+                }),
+                entry_point: "fragment_alpha_clipped",
+                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                bias: wgpu::DepthBiasState::default(),
+                stencil: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: Default::default(),
+        });
+
+    let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("line pipeline layout"),
+        bind_group_layouts: &[&uniform_bgl],
+        push_constant_ranges: &[],
+    });
+
+    let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("line pipeline"),
+        layout: Some(&line_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader_cache.get("line_vertex", || {
+                device.create_shader_module(&wgpu::include_spirv!("../line_vertex.spv"))
+            }),
+            entry_point: "line_vertex",
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 6 * 4,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader_cache.get("flat_colour", || {
+                device.create_shader_module(&wgpu::include_spirv!("../flat_colour.spv"))
+            }),
+            entry_point: "flat_colour",
+            targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: Default::default(),
+    });
 
     basis_universal_wasm::wasm_init().await.unwrap();
     basis_universal_wasm::initialize_basis();
@@ -329,28 +360,27 @@ async fn run() {
         device: device.clone(),
         queue: queue.clone(),
         fetched_images: Rc::new(RefCell::new(fetched_images)),
-        pbr_pipeline: pbr_pipeline.clone(),
-        pbr_alpha_clipped_pipeline: pbr_alpha_clipped_pipeline.clone(),
+        model_bgl: model_bgl.clone(),
         black_image: load_single_pixel_image(
-            &*device.borrow(),
+            &*device,
             &queue,
             wgpu::TextureFormat::Rgba8UnormSrgb,
             &[0, 0, 0, 255],
         ),
         default_metallic_roughness_image: load_single_pixel_image(
-            &*device.borrow(),
+            &*device,
             &queue,
             wgpu::TextureFormat::Rgba8Unorm,
             &[0, 255, 0, 255],
         ),
         flat_normals_image: load_single_pixel_image(
-            &*device.borrow(),
+            &*device,
             &queue,
             wgpu::TextureFormat::Rgba8Unorm,
             &[128, 255, 128, 255],
         ),
         white_image: load_single_pixel_image(
-            &*device.borrow(),
+            &*device,
             &queue,
             wgpu::TextureFormat::Rgba8UnormSrgb,
             &[255, 255, 255, 255],
@@ -440,40 +470,54 @@ async fn run() {
     on_message.forget();
 
     let mut instance_buffer = ResizingBuffer::new(
-        &device.borrow().inner,
+        &device,
         bytemuck::cast_slice(&instances.borrow()),
         wgpu::BufferUsages::VERTEX,
     );
 
-    let left_eye_uniform_buffer =
-        device
-            .borrow()
-            .create_resource(
-                device
-                    .borrow()
-                    .inner
-                    .create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("left eye uniform buffer"),
-                        size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
-                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
-                        mapped_at_creation: false,
-                    }),
-            );
+    let left_eye_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("left eye uniform buffer"),
+        size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        mapped_at_creation: false,
+    });
 
-    let right_eye_uniform_buffer =
-        device
-            .borrow()
-            .create_resource(
-                device
-                    .borrow()
-                    .inner
-                    .create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("right eye uniform buffer"),
-                        size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
-                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
-                        mapped_at_creation: false,
-                    }),
-            );
+    let right_eye_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("right eye uniform buffer"),
+        size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        mapped_at_creation: false,
+    });
+
+    let left_eye_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("left eye bind group"),
+        layout: &uniform_bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: left_eye_uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&linear_sampler),
+            },
+        ],
+    });
+
+    let right_eye_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("right eye bind group"),
+        layout: &uniform_bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: right_eye_uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&linear_sampler),
+            },
+        ],
+    });
 
     let mut line_verts = [
         LineVertex {
@@ -494,351 +538,253 @@ async fn run() {
         },
     ];
 
-    let line_buffer = device
-        .borrow()
-        .create_resource(device.borrow().inner.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("line buffer"),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
-                contents: bytemuck::cast_slice(&line_verts),
-            },
-        ));
+    let line_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("line buffer"),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
+        contents: bytemuck::cast_slice(&line_verts),
+    });
 
     wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |_time, frame| {
-        {
-            let models = models.borrow();
-            let device = device.borrow();
+        let models = models.borrow();
 
-            let xr_session: web_sys::XrSession = frame.session();
+        let xr_session: web_sys::XrSession = frame.session();
 
-            let pose = match frame.get_viewer_pose(&reference_space) {
-                Some(pose) => pose,
-                None => return,
-            };
+        let pose = match frame.get_viewer_pose(&reference_space) {
+            Some(pose) => pose,
+            None => return,
+        };
 
-            let input_sources = xr_session.input_sources();
+        let input_sources = xr_session.input_sources();
 
-            for i in 0..input_sources.length() {
-                let input_source = input_sources.get(i).unwrap();
+        for i in 0..input_sources.length() {
+            let input_source = input_sources.get(i).unwrap();
 
-                if let Some(grip_space) = input_source.grip_space() {
-                    let grip_pose = frame.get_pose(&grip_space, &reference_space).unwrap();
-                    let transform = grip_pose.transform();
-                    let instance = Instance::from_transform(transform, 1.0);
-                    instances.borrow_mut()[i as usize + 1] = instance;
-                    line_verts[i as usize * 2].position = instance.position;
+            if let Some(grip_space) = input_source.grip_space() {
+                let grip_pose = frame.get_pose(&grip_space, &reference_space).unwrap();
+                let transform = grip_pose.transform();
+                let instance = Instance::from_transform(transform, 1.0);
+                instances.borrow_mut()[i as usize + 1] = instance;
+                line_verts[i as usize * 2].position = instance.position;
+            }
+        }
+
+        let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
+
+        struct Viewport {
+            x: f32,
+            y: f32,
+            width: f32,
+            height: f32,
+        }
+
+        let viewports: Vec<_> = views
+            .iter()
+            .map(|view| {
+                let viewport = xr_gl_layer.get_viewport(view).unwrap();
+
+                Viewport {
+                    x: viewport.x() as f32,
+                    y: viewport.y() as f32,
+                    width: viewport.width() as f32,
+                    height: viewport.height() as f32,
                 }
-            }
+            })
+            .collect();
 
-            let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
+        let base_layer = xr_session.render_state().base_layer().unwrap();
 
-            struct Viewport {
-                x: f32,
-                y: f32,
-                width: f32,
-                height: f32,
-            }
+        {
+            let parse_matrix = |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
 
-            let viewports: Vec<_> = views
-                .iter()
-                .map(|view| {
-                    let viewport = xr_gl_layer.get_viewport(view).unwrap();
+            let left_proj = parse_matrix(views[0].projection_matrix());
+            let left_inv = parse_matrix(views[0].transform().inverse().matrix());
 
-                    Viewport {
-                        x: viewport.x() as f32,
-                        y: viewport.y() as f32,
-                        width: viewport.width() as f32,
-                        height: viewport.height() as f32,
+            queue.write_buffer(
+                &left_eye_uniform_buffer,
+                0,
+                bytemuck::bytes_of(
+                    &shared_structs::Uniforms {
+                        projection_view: { left_proj * left_inv }.into(),
+                        eye_position: {
+                            let p = views[0].transform().position();
+                            glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
+                        },
                     }
-                })
-                .collect();
+                    .as_std140(),
+                ),
+            );
 
-            let base_layer = xr_session.render_state().base_layer().unwrap();
-
+            // Send the head transform to remotes.
             {
-                let parse_matrix =
-                    |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
+                let mut head_transform = Instance::from_transform(pose.transform(), 0.5);
+                head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
+                let instances = [head_transform, instances.borrow()[1], instances.borrow()[2]];
+                let bytes = bytemuck::cast_slice(&instances);
 
-                let left_proj = parse_matrix(views[0].projection_matrix());
-                let left_inv = parse_matrix(views[0].transform().inverse().matrix());
+                let uint8 = unsafe { js_sys::Uint8Array::view(bytes) };
+
+                send_fn
+                    .call1(&wasm_bindgen::JsValue::undefined(), &uint8)
+                    .unwrap();
+            }
+
+            if let Some(right_view) = views.get(1) {
+                let right_inv = parse_matrix(right_view.transform().inverse().matrix());
+                let right_proj = parse_matrix(right_view.projection_matrix());
 
                 queue.write_buffer(
-                    &left_eye_uniform_buffer,
+                    &right_eye_uniform_buffer,
                     0,
                     bytemuck::bytes_of(
                         &shared_structs::Uniforms {
-                            projection_view: { left_proj * left_inv }.into(),
+                            projection_view: { right_proj * right_inv }.into(),
                             eye_position: {
-                                let p = views[0].transform().position();
+                                let p = right_view.transform().position();
                                 glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
                             },
                         }
                         .as_std140(),
                     ),
                 );
-
-                // Send the head transform to remotes.
-                {
-                    let mut head_transform = Instance::from_transform(pose.transform(), 0.5);
-                    head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
-                    let instances = [head_transform, instances.borrow()[1], instances.borrow()[2]];
-                    let bytes = bytemuck::cast_slice(&instances);
-
-                    let uint8 = unsafe { js_sys::Uint8Array::view(bytes) };
-
-                    send_fn
-                        .call1(&wasm_bindgen::JsValue::undefined(), &uint8)
-                        .unwrap();
-                }
-
-                if let Some(right_view) = views.get(1) {
-                    let right_inv = parse_matrix(right_view.transform().inverse().matrix());
-                    let right_proj = parse_matrix(right_view.projection_matrix());
-
-                    queue.write_buffer(
-                        &right_eye_uniform_buffer,
-                        0,
-                        bytemuck::bytes_of(
-                            &shared_structs::Uniforms {
-                                projection_view: { right_proj * right_inv }.into(),
-                                eye_position: {
-                                    let p = right_view.transform().position();
-                                    glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                                },
-                            }
-                            .as_std140(),
-                        ),
-                    );
-                }
-
-                instance_buffer.write(
-                    &device.inner,
-                    &queue,
-                    bytemuck::cast_slice(&instances.borrow()),
-                );
-
-                queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
             }
 
-            let framebuffer = base_layer.framebuffer();
+            instance_buffer.write(&device, &queue, bytemuck::cast_slice(&instances.borrow()));
 
-            let texture = unsafe {
-                device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
-                    wgpu_hal::gles::Texture {
-                        inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer {
-                            inner: framebuffer.clone(),
-                        },
-                        mip_level_count: 1,
-                        array_layer_count: 1,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        format_desc: wgpu_hal::gles::TextureFormatDesc {
-                            internal: glow::RGBA,
-                            external: glow::RGBA,
-                            data_type: glow::UNSIGNED_BYTE,
-                        },
-                        copy_size: wgpu_hal::CopyExtent {
-                            width: base_layer.framebuffer_width(),
-                            height: base_layer.framebuffer_height(),
-                            depth: 1,
-                        },
-                    },
-                    &wgpu::TextureDescriptor {
-                        label: Some("framebuffer (color)"),
-                        size: wgpu::Extent3d {
-                            width: base_layer.framebuffer_width(),
-                            height: base_layer.framebuffer_height(),
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    },
-                )
-            };
+            queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
+        }
 
-            let depth = unsafe {
-                device.inner.create_texture_from_hal::<wgpu_hal::gles::Api>(
-                    wgpu_hal::gles::Texture {
-                        inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer {
-                            inner: framebuffer,
-                        },
-                        mip_level_count: 1,
-                        array_layer_count: 1,
-                        format: wgpu::TextureFormat::Depth32Float,
-                        format_desc: wgpu_hal::gles::TextureFormatDesc {
-                            internal: glow::RGBA,
-                            external: glow::RGBA,
-                            data_type: glow::UNSIGNED_BYTE,
-                        },
-                        copy_size: wgpu_hal::CopyExtent {
-                            width: base_layer.framebuffer_width(),
-                            height: base_layer.framebuffer_height(),
-                            depth: 1,
-                        },
-                    },
-                    &wgpu::TextureDescriptor {
-                        label: Some("framebuffer (depth)"),
-                        size: wgpu::Extent3d {
-                            width: base_layer.framebuffer_width(),
-                            height: base_layer.framebuffer_height(),
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Depth32Float,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    },
-                )
-            };
+        let framebuffer = base_layer.framebuffer();
 
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
-
-            let mut encoder =
-                device
-                    .inner
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("command encoder"),
-                    });
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main render pass"),
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: if mode == web_sys::XrSessionMode::ImmersiveAr {
-                            wgpu::LoadOp::Load
-                        } else {
-                            wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.1,
-                                g: 0.2,
-                                b: 0.3,
-                                a: 1.0,
-                            })
-                        },
-                        store: true,
+        let texture = unsafe {
+            device.create_texture_from_hal::<wgpu_hal::gles::Api>(
+                wgpu_hal::gles::Texture {
+                    inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer {
+                        inner: framebuffer.clone(),
                     },
-                }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: true,
-                    }),
-                    stencil_ops: None,
+                    mip_level_count: 1,
+                    array_layer_count: 1,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format_desc: wgpu_hal::gles::TextureFormatDesc {
+                        internal: glow::RGBA,
+                        external: glow::RGBA,
+                        data_type: glow::UNSIGNED_BYTE,
+                    },
+                    copy_size: wgpu_hal::CopyExtent {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth: 1,
+                    },
+                },
+                &wgpu::TextureDescriptor {
+                    label: Some("framebuffer (color)"),
+                    size: wgpu::Extent3d {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                },
+            )
+        };
+
+        let depth = unsafe {
+            device.create_texture_from_hal::<wgpu_hal::gles::Api>(
+                wgpu_hal::gles::Texture {
+                    inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
+                    mip_level_count: 1,
+                    array_layer_count: 1,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    format_desc: wgpu_hal::gles::TextureFormatDesc {
+                        internal: glow::RGBA,
+                        external: glow::RGBA,
+                        data_type: glow::UNSIGNED_BYTE,
+                    },
+                    copy_size: wgpu_hal::CopyExtent {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth: 1,
+                    },
+                },
+                &wgpu::TextureDescriptor {
+                    label: Some("framebuffer (depth)"),
+                    size: wgpu::Extent3d {
+                        width: base_layer.framebuffer_width(),
+                        height: base_layer.framebuffer_height(),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                },
+            )
+        };
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("command encoder"),
+        });
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("main render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: if mode == web_sys::XrSessionMode::ImmersiveAr {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
+                        })
+                    },
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: true,
                 }),
-            });
+                stencil_ops: None,
+            }),
+        });
 
-            let uniform_buffer = |i| {
-                BindingResource::Buffer(if i == 0 {
-                    &left_eye_uniform_buffer
-                } else {
-                    &right_eye_uniform_buffer
-                })
-            };
+        let uniform_bind_group = |i| {
+            if i == 0 {
+                &left_eye_bind_group
+            } else {
+                &right_eye_bind_group
+            }
+        };
 
-            {
-                let formats = &[wgpu::TextureFormat::Rgba8Unorm];
+        {
+            render_pass.set_pipeline(&pbr_pipeline);
 
-                let device = device.with_formats(formats, Some(wgpu::TextureFormat::Depth32Float));
+            render_pass.set_vertex_buffer(3, instance_buffer.inner.slice(..));
 
-                render_pass.set_pipeline(&pbr_pipeline.pipeline);
+            let mut instance_offset = 0;
 
-                render_pass.set_vertex_buffer(3, instance_buffer.inner.slice(..));
+            for (model_index, model) in models.iter().enumerate() {
+                for primitive in &model.opaque_primitives {
+                    render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
+                    render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
+                    render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
+                    render_pass
+                        .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
 
-                let mut instance_offset = 0;
-
-                for (model_index, model) in models.iter().enumerate() {
-                    for primitive in &model.opaque_primitives {
-                        render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
-                        render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
-                        render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
-                        render_pass.set_index_buffer(
-                            primitive.indices.slice(..),
-                            wgpu::IndexFormat::Uint32,
-                        );
-
-                        render_pass.set_bind_group(1, &primitive.bind_group, &[]);
-
-                        for (i, viewport) in viewports.iter().enumerate() {
-                            render_pass.set_viewport(
-                                viewport.x,
-                                viewport.y,
-                                viewport.width,
-                                viewport.height,
-                                0.0,
-                                1.0,
-                            );
-
-                            let bind_group = device.get_bind_group(
-                                ("pbr pipeline uniform", i as u32),
-                                0,
-                                &pbr_pipeline,
-                                &[uniform_buffer(i), BindingResource::Sampler(&linear_sampler)],
-                            );
-
-                            render_pass.set_bind_group(0, bind_group, &[]);
-                            render_pass.draw_indexed(
-                                0..primitive.num_indices,
-                                0,
-                                instance_offset..instance_offset + instance_counts[model_index],
-                            );
-                        }
-                    }
-
-                    instance_offset += instance_counts[model_index];
-                }
-
-                render_pass.set_pipeline(&pbr_alpha_clipped_pipeline.pipeline);
-
-                let mut instance_offset = 0;
-
-                for (model_index, model) in models.iter().enumerate() {
-                    for primitive in &model.alpha_clipped_primitives {
-                        render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
-                        render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
-                        render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
-                        render_pass.set_index_buffer(
-                            primitive.indices.slice(..),
-                            wgpu::IndexFormat::Uint32,
-                        );
-
-                        render_pass.set_bind_group(1, &primitive.bind_group, &[]);
-
-                        for (i, viewport) in viewports.iter().enumerate() {
-                            render_pass.set_viewport(
-                                viewport.x,
-                                viewport.y,
-                                viewport.width,
-                                viewport.height,
-                                0.0,
-                                1.0,
-                            );
-                            let bind_group = device.get_bind_group(
-                                ("pbr pipeline alpha clipped uniform", i as u32),
-                                0,
-                                &pbr_alpha_clipped_pipeline,
-                                &[uniform_buffer(i), BindingResource::Sampler(&linear_sampler)],
-                            );
-                            render_pass.set_bind_group(0, bind_group, &[]);
-                            render_pass.draw_indexed(
-                                0..primitive.num_indices,
-                                0,
-                                instance_offset..instance_offset + instance_counts[model_index],
-                            );
-                        }
-                    }
-
-                    instance_offset += instance_counts[model_index];
-                }
-
-                {
-                    render_pass.set_pipeline(&line_pipeline.pipeline);
-                    render_pass.set_vertex_buffer(0, line_buffer.slice(..));
+                    render_pass.set_bind_group(1, &primitive.bind_group, &[]);
 
                     for (i, viewport) in viewports.iter().enumerate() {
                         render_pass.set_viewport(
@@ -850,27 +796,77 @@ async fn run() {
                             1.0,
                         );
 
-                        let bind_group = device.get_bind_group(
-                            ("line pipeline", i as u32),
+                        render_pass.set_bind_group(0, uniform_bind_group(i), &[]);
+                        render_pass.draw_indexed(
+                            0..primitive.num_indices,
                             0,
-                            &line_pipeline,
-                            &[uniform_buffer(i)],
+                            instance_offset..instance_offset + instance_counts[model_index],
                         );
-
-                        render_pass.set_bind_group(0, bind_group, &[]);
-                        render_pass.draw(0..4, 0..1);
                     }
                 }
+
+                instance_offset += instance_counts[model_index];
             }
 
-            drop(render_pass);
+            render_pass.set_pipeline(&pbr_alpha_clipped_pipeline);
 
-            queue.submit(std::iter::once(encoder.finish()));
+            let mut instance_offset = 0;
+
+            for (model_index, model) in models.iter().enumerate() {
+                for primitive in &model.alpha_clipped_primitives {
+                    render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
+                    render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
+                    render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
+                    render_pass
+                        .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                    render_pass.set_bind_group(1, &primitive.bind_group, &[]);
+
+                    for (i, viewport) in viewports.iter().enumerate() {
+                        render_pass.set_viewport(
+                            viewport.x,
+                            viewport.y,
+                            viewport.width,
+                            viewport.height,
+                            0.0,
+                            1.0,
+                        );
+
+                        render_pass.set_bind_group(0, uniform_bind_group(i), &[]);
+                        render_pass.draw_indexed(
+                            0..primitive.num_indices,
+                            0,
+                            instance_offset..instance_offset + instance_counts[model_index],
+                        );
+                    }
+                }
+
+                instance_offset += instance_counts[model_index];
+            }
+
+            {
+                render_pass.set_pipeline(&line_pipeline);
+                render_pass.set_vertex_buffer(0, line_buffer.slice(..));
+
+                for (i, viewport) in viewports.iter().enumerate() {
+                    render_pass.set_viewport(
+                        viewport.x,
+                        viewport.y,
+                        viewport.width,
+                        viewport.height,
+                        0.0,
+                        1.0,
+                    );
+
+                    render_pass.set_bind_group(0, uniform_bind_group(i), &[]);
+                    render_pass.draw(0..4, 0..1);
+                }
+            }
         }
 
-        if let Ok(mut available_device) = device.try_borrow_mut() {
-            available_device.flush();
-        }
+        drop(render_pass);
+
+        queue.submit(std::iter::once(encoder.finish()));
     });
 }
 
