@@ -5,6 +5,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
+// TODO:
+// * Remove the use of the kiss engine device because the whole flushing thing sucks. Can use a shader/pipeline cache instead if needed.
+//
+// * Use blitting to have mipmap for standard textures.
+
 pub struct ModelLoadContext {
     pub device: Rc<RefCell<Device>>,
     pub queue: Rc<wgpu::Queue>,
