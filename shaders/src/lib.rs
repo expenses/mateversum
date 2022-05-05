@@ -231,7 +231,8 @@ pub fn fullscreen_tri(
     #[spirv(position)] builtin_pos: &mut Vec4,
 ) {
     *uv = Vec2::new(((vert_idx << 1) & 2) as f32, (vert_idx & 2) as f32);
-    let pos = 2.0 * *uv - Vec2::ONE;
+    let mut pos = 2.0 * *uv - Vec2::ONE;
+    pos.y = -pos.y;
 
     *builtin_pos = Vec4::new(pos.x, pos.y, 0.0, 1.0);
 }
@@ -243,7 +244,7 @@ pub fn blit(
     #[spirv(descriptor_set = 0, binding = 1)] texture: &SampledImage,
     output: &mut Vec4,
 ) {
-    *output = texture.sample(*sampler, uv);
+    *output = texture.sample_by_lod(*sampler, uv, 0.0);
 }
 
 #[spirv(vertex)]

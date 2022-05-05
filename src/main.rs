@@ -15,6 +15,7 @@ use assets::{
     load_gltf_from_url, load_single_pixel_image, prune_fetched_images, FetchedImages,
     ModelLoadContext,
 };
+use caching::ResourceCache;
 
 enum AnisotrophicFilteringLevel {
     L2 = 2,
@@ -157,17 +158,19 @@ async fn run() {
         anisotrophic_filtering_level: Some(AnisotrophicFilteringLevel::L16),
     };
 
-    let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
-        anisotropy_clamp: performance_settings
-            .anisotrophic_filtering_level
-            .map(|level| std::num::NonZeroU8::new(level as u8).unwrap()),
-        ..Default::default()
-    });
+    let linear_sampler = Rc::new(
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: performance_settings
+                .anisotrophic_filtering_level
+                .map(|level| std::num::NonZeroU8::new(level as u8).unwrap()),
+            ..Default::default()
+        }),
+    );
 
     let uniform_entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
         binding,
@@ -246,7 +249,7 @@ async fn run() {
         },
     ];
 
-    let shader_cache = caching::ResourceCache::default();
+    let shader_cache = Rc::new(ResourceCache::default());
 
     let vertex_state = wgpu::VertexState {
         module: shader_cache.get("vertex", || {
@@ -357,10 +360,10 @@ async fn run() {
     basis_universal_wasm::initialize_basis();
 
     let context = Rc::new(ModelLoadContext {
-        device: device.clone(),
-        queue: queue.clone(),
+        device: Rc::clone(&device),
+        queue: Rc::clone(&queue),
         fetched_images: Rc::new(RefCell::new(fetched_images)),
-        model_bgl: model_bgl.clone(),
+        model_bgl: Rc::clone(&model_bgl),
         black_image: load_single_pixel_image(
             &*device,
             &queue,
@@ -386,6 +389,9 @@ async fn run() {
             &[255, 255, 255, 255],
         ),
         supported_features,
+        shader_cache: Rc::clone(&shader_cache),
+        pipeline_cache: Default::default(),
+        sampler: Rc::clone(&linear_sampler),
     });
 
     let instances = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -408,8 +414,8 @@ async fn run() {
             .unwrap();
 
         {
-            let models = models.clone();
-            let context = context.clone();
+            let models = Rc::clone(&models);
+            let context = Rc::clone(&context);
             wasm_bindgen_futures::spawn_local(async move {
                 let model = load_gltf_from_url(url, context).await;
                 models.borrow_mut()[i] = model;
@@ -442,7 +448,7 @@ async fn run() {
             .unwrap()
             .into();
 
-    let instances_clone = instances.clone();
+    let instances_clone = Rc::clone(&instances);
     let on_message = wasm_bindgen::closure::Closure::wrap(Box::new(
         move |uint8: js_sys::Uint8Array, peer_index: u32| {
             let mut bytes = [0; 96];

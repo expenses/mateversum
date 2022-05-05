@@ -4,8 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
-// TODO:
-// * Use blitting to have mipmap for standard textures.
+use crate::caching::{PipelineData, ResourceCache};
 
 pub struct ModelLoadContext {
     pub device: Rc<wgpu::Device>,
@@ -17,6 +16,9 @@ pub struct ModelLoadContext {
     pub flat_normals_image: Rc<Texture>,
     pub default_metallic_roughness_image: Rc<Texture>,
     pub supported_features: wgpu::Features,
+    pub shader_cache: Rc<ResourceCache<wgpu::ShaderModule>>,
+    pub pipeline_cache: Rc<ResourceCache<PipelineData>>,
+    pub sampler: Rc<wgpu::Sampler>,
 }
 
 struct ModelBuffers {
@@ -487,8 +489,7 @@ async fn load_image_from_gltf(
                 let (_mime_type, data) = url.path().split_once(',').unwrap();
 
                 Rc::new(load_standard_image_format(
-                    &context.device,
-                    &context.queue,
+                    context,
                     &base64::decode(data).unwrap(),
                     srgb,
                 ))
@@ -537,7 +538,7 @@ async fn load_image_from_mime_type(
             srgb,
         )
     } else {
-        load_standard_image_format(&context.device, &context.queue, bytes, srgb)
+        load_standard_image_format(context, bytes, srgb)
     }
 }
 
@@ -700,8 +701,7 @@ fn load_ktx2(device: &Rc<wgpu::Device>, queue: &wgpu::Queue, bytes: &[u8]) -> Te
 }
 
 fn load_standard_image_format(
-    device: &Rc<wgpu::Device>,
-    queue: &wgpu::Queue,
+    context: &ModelLoadContext,
     format_bytes: &[u8],
     srgb: bool,
 ) -> Texture {
@@ -717,30 +717,9 @@ fn load_standard_image_format(
         wgpu::TextureFormat::Rgba8Unorm
     };
 
-    let blit_textures: Vec<_> = (1..mip_level_count)
-        .map(|i| {
-            let width = image.width() >> i;
-            let height = image.height() >> i;
-
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: None,
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            })
-        })
-        .collect();
-
-    Texture::new(create_texture_with_first_mip_data(
-        device,
-        queue,
+    let texture = Texture::new(create_texture_with_first_mip_data(
+        &context.device,
+        &context.queue,
         &wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -748,7 +727,7 @@ fn load_standard_image_format(
                 height: image.height(),
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: if srgb {
@@ -759,7 +738,209 @@ fn load_standard_image_format(
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
         },
         &*image,
-    ))
+    ));
+
+    let temp_blit_textures: Vec<_> = (1..mip_level_count)
+        .map(|level| {
+            let mip_extent = wgpu::Extent3d {
+                width: image.width() >> level,
+                height: image.height() >> level,
+                depth_or_array_layers: 1,
+            };
+
+            Texture::new(context.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: mip_extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+            }))
+        })
+        .collect();
+
+    let mut encoder = context
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("command encoder"),
+        });
+
+    let pipeline = context.pipeline_cache.get(
+        if srgb {
+            "blit pipeline (srgb)"
+        } else {
+            "blit pipeline"
+        },
+        || {
+            let bind_group_layout =
+                context
+                    .device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: None,
+                        entries: &[
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 0,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                count: None,
+                                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 1,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                count: None,
+                                ty: wgpu::BindingType::Texture {
+                                    sample_type: wgpu::TextureSampleType::Float {
+                                        filterable: true,
+                                    },
+                                    view_dimension: wgpu::TextureViewDimension::D2,
+                                    multisampled: false,
+                                },
+                            },
+                        ],
+                    });
+
+            let pipeline_layout =
+                context
+                    .device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: None,
+                        bind_group_layouts: &[&bind_group_layout],
+                        push_constant_ranges: &[],
+                    });
+
+            let pipeline = context
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: context.shader_cache.get("fullscreen_tri", || {
+                            context.device.create_shader_module(&wgpu::include_spirv!(
+                                "../fullscreen_tri.spv"
+                            ))
+                        }),
+                        entry_point: "fullscreen_tri",
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: context.shader_cache.get("blit", || {
+                            context
+                                .device
+                                .create_shader_module(&wgpu::include_spirv!("../blit.spv"))
+                        }),
+                        entry_point: "blit",
+                        targets: &[format.into()],
+                    }),
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    multiview: Default::default(),
+                });
+
+            PipelineData {
+                pipeline,
+                bind_group_layout,
+                pipeline_layout,
+            }
+        },
+    );
+
+    for source_level in 0..mip_level_count - 1 {
+        let target_level = source_level + 1;
+
+        let mip_extent = wgpu::Extent3d {
+            width: image.width() >> target_level,
+            height: image.height() >> target_level,
+            depth_or_array_layers: 1,
+        };
+
+        let bind_group = if source_level == 0 {
+            let source_view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
+                mip_level_count: Some(std::num::NonZeroU32::new(1).unwrap()),
+                ..Default::default()
+            });
+
+            context
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(&context.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&source_view),
+                        },
+                    ],
+                })
+        } else {
+            context
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(&context.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &temp_blit_textures[source_level as usize - 1].view,
+                            ),
+                        },
+                    ],
+                })
+        };
+
+        let temp_blit_texture = &temp_blit_textures[source_level as usize];
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("blit render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &temp_blit_texture.view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: None,
+        });
+
+        render_pass.set_pipeline(&pipeline.pipeline);
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+
+        drop(render_pass);
+
+        encoder.copy_texture_to_texture(
+            wgpu::ImageCopyTexture {
+                texture: &temp_blit_texture.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyTexture {
+                texture: &texture.texture,
+                mip_level: source_level + 1,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            mip_extent,
+        );
+    }
+
+    context.queue.submit(std::iter::once(encoder.finish()));
+
+    texture
 }
 
 pub fn load_single_pixel_image(

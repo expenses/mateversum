@@ -19,3 +19,9 @@ impl<T> ResourceCache<T> {
         }
     }
 }
+
+pub struct PipelineData {
+    pub pipeline: wgpu::RenderPipeline,
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub pipeline_layout: wgpu::PipelineLayout,
+}
