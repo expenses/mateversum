@@ -31,6 +31,7 @@ wasm-streams = "0.2.2"
 wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
 basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-wasm" }
 elsa = "1.7.0"
+anyhow = "1.0.57"
 
 [dependencies.web-sys]
 version = "0.3.36"

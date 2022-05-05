@@ -6,19 +6,19 @@ use wgpu::util::DeviceExt;
 
 use crate::caching::{PipelineData, ResourceCache};
 
-pub struct ModelLoadContext {
-    pub device: Rc<wgpu::Device>,
-    pub queue: Rc<wgpu::Queue>,
-    pub fetched_images: Rc<RefCell<FetchedImages>>,
-    pub model_bgl: Rc<wgpu::BindGroupLayout>,
-    pub black_image: Rc<Texture>,
-    pub white_image: Rc<Texture>,
-    pub flat_normals_image: Rc<Texture>,
-    pub default_metallic_roughness_image: Rc<Texture>,
-    pub supported_features: wgpu::Features,
-    pub shader_cache: Rc<ResourceCache<wgpu::ShaderModule>>,
-    pub pipeline_cache: Rc<ResourceCache<PipelineData>>,
-    pub sampler: Rc<wgpu::Sampler>,
+pub(crate) struct ModelLoadContext {
+    pub(crate) device: Rc<wgpu::Device>,
+    pub(crate) queue: Rc<wgpu::Queue>,
+    pub(crate) fetched_images: Rc<RefCell<FetchedImages>>,
+    pub(crate) model_bgl: Rc<wgpu::BindGroupLayout>,
+    pub(crate) black_image: Rc<Texture>,
+    pub(crate) white_image: Rc<Texture>,
+    pub(crate) flat_normals_image: Rc<Texture>,
+    pub(crate) default_metallic_roughness_image: Rc<Texture>,
+    pub(crate) supported_features: wgpu::Features,
+    pub(crate) shader_cache: Rc<ResourceCache<wgpu::ShaderModule>>,
+    pub(crate) pipeline_cache: Rc<ResourceCache<PipelineData>>,
+    pub(crate) sampler: Rc<wgpu::Sampler>,
 }
 
 struct ModelBuffers {
@@ -47,7 +47,7 @@ async fn upload_model_texture_from_gltf(
     binding: Rc<RefCell<Rc<Texture>>>,
     srgb: bool,
     context: &TextureLoadContext,
-) {
+) -> anyhow::Result<()> {
     let texture = load_image_from_gltf(
         &context.gltf,
         gltf_texture,
@@ -56,7 +56,7 @@ async fn upload_model_texture_from_gltf(
         &context.context,
         context.base_url.as_ref().as_ref(),
     )
-    .await;
+    .await?;
 
     update_model_texture(
         texture,
@@ -65,7 +65,9 @@ async fn upload_model_texture_from_gltf(
         &context.textures,
         &context.material_settings,
         Rc::clone(&context.bind_group),
-    )
+    );
+
+    Ok(())
 }
 
 fn update_model_texture(
@@ -126,13 +128,13 @@ fn create_model_bind_group(
         })
 }
 
-pub struct ModelPrimitive {
-    pub indices: wgpu::Buffer,
-    pub positions: wgpu::Buffer,
-    pub normals: wgpu::Buffer,
-    pub uvs: wgpu::Buffer,
-    pub bind_group: Rc<RefCell<wgpu::BindGroup>>,
-    pub num_indices: u32,
+pub(crate) struct ModelPrimitive {
+    pub(crate) indices: wgpu::Buffer,
+    pub(crate) positions: wgpu::Buffer,
+    pub(crate) normals: wgpu::Buffer,
+    pub(crate) uvs: wgpu::Buffer,
+    pub(crate) bind_group: Rc<RefCell<wgpu::BindGroup>>,
+    pub(crate) num_indices: u32,
     // We hold handles onto the used textures here, so that when the model is dropped, the `Rc::strong_count`
     // of the textures goes down. Then we are able to unload the textures from GPU memory by `HashMap::retain`ing the fetched images..
     _textures: Rc<MaterialTextures>,
@@ -198,7 +200,8 @@ impl StagingModelPrimitive {
                         true,
                         &context,
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 }
             }
         });
@@ -215,7 +218,8 @@ impl StagingModelPrimitive {
                         false,
                         &context,
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 }
             }
         });
@@ -233,7 +237,8 @@ impl StagingModelPrimitive {
                         false,
                         &context,
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 }
             }
         });
@@ -250,7 +255,8 @@ impl StagingModelPrimitive {
                         true,
                         &context,
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 }
             }
         });
@@ -292,21 +298,16 @@ impl StagingModelPrimitive {
 }
 
 #[derive(Default)]
-pub struct Model {
-    pub opaque_primitives: Vec<ModelPrimitive>,
-    pub alpha_clipped_primitives: Vec<ModelPrimitive>,
+pub(crate) struct Model {
+    pub(crate) opaque_primitives: Vec<ModelPrimitive>,
+    pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
 }
 
-pub async fn load_gltf_from_url(url: url::Url, context: Rc<ModelLoadContext>) -> Model {
-    let bytes = fetch_bytes(&url).await;
-    load_gltf_from_bytes(&bytes, Some(url), context).await
-}
-
-pub async fn load_gltf_from_bytes(
+pub(crate) async fn load_gltf_from_bytes(
     bytes: &[u8],
     base_url: Option<url::Url>,
     context: Rc<ModelLoadContext>,
-) -> Model {
+) -> anyhow::Result<Model> {
     let gltf = gltf::Gltf::from_slice(bytes).unwrap();
 
     let mut buffers = ModelBuffers {
@@ -331,7 +332,7 @@ pub async fn load_gltf_from_bytes(
                         .map
                         .insert(buffer.index(), base64::decode(data).unwrap());
                 } else {
-                    buffers.map.insert(buffer.index(), fetch_bytes(&url).await);
+                    buffers.map.insert(buffer.index(), fetch_bytes(&url).await?);
                 }
             }
         }
@@ -448,10 +449,10 @@ pub async fn load_gltf_from_bytes(
         }
     }
 
-    Model {
+    Ok(Model {
         opaque_primitives: opaque_primitives_vec,
         alpha_clipped_primitives: alpha_clipped_primitives_vec,
-    }
+    })
 }
 
 async fn load_image_from_gltf(
@@ -461,10 +462,10 @@ async fn load_image_from_gltf(
     buffers: &ModelBuffers,
     context: &ModelLoadContext,
     base_url: Option<&url::Url>,
-) -> Rc<Texture> {
+) -> anyhow::Result<Rc<Texture>> {
     let image = texture.source();
 
-    match image.source() {
+    Ok(match image.source() {
         gltf::image::Source::View { view, mime_type } => {
             log::info!("{} {}", texture.index(), mime_type);
             let buffer = view.buffer();
@@ -496,7 +497,7 @@ async fn load_image_from_gltf(
             } else {
                 if let Some((image, cached_srgb)) = context.fetched_images.borrow().get(&url) {
                     if *cached_srgb == srgb {
-                        return Rc::clone(image);
+                        return Ok(Rc::clone(image));
                     } else {
                         log::warn!(
                             "Same URL image is used twice, in both srgb and non-srgb formats: {}",
@@ -505,7 +506,7 @@ async fn load_image_from_gltf(
                     }
                 }
 
-                let bytes = fetch_bytes(&url).await;
+                let bytes = fetch_bytes(&url).await?;
 
                 let image =
                     Rc::new(load_image_from_mime_type(context, &bytes, srgb, mime_type).await);
@@ -518,7 +519,7 @@ async fn load_image_from_gltf(
                 image
             }
         }
-    }
+    })
 }
 
 async fn load_image_from_mime_type(
@@ -924,7 +925,7 @@ fn load_standard_image_format(
     texture
 }
 
-pub fn load_single_pixel_image(
+pub(crate) fn load_single_pixel_image(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
@@ -949,32 +950,54 @@ pub fn load_single_pixel_image(
     )))
 }
 
-fn response_body_async_reader(response: web_sys::Response) -> impl futures::io::AsyncRead {
-    use futures::{AsyncReadExt, StreamExt, TryStreamExt};
+fn response_body_async_reader(
+    response: web_sys::Response,
+) -> anyhow::Result<impl futures::io::AsyncRead> {
+    use futures::{StreamExt, TryStreamExt};
 
     let js_stream = wasm_streams::ReadableStream::from_raw(
-        wasm_bindgen::JsValue::from(response.body().unwrap()).into(),
+        wasm_bindgen::JsValue::from(
+            response
+                .body()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get response body"))?,
+        )
+        .into(),
     );
 
-    js_stream
+    Ok(js_stream
         .into_stream()
         .map(|value| {
             let array: js_sys::Uint8Array = value.unwrap().into();
             let vec = array.to_vec();
             Ok(vec)
         })
-        .into_async_read()
+        .into_async_read())
 }
 
-async fn fetch_bytes(url: &url::Url) -> Vec<u8> {
+pub(crate) async fn async_reader_from_fetch(
+    url: &url::Url,
+) -> anyhow::Result<impl futures::io::AsyncRead> {
     let response: web_sys::Response = wasm_bindgen_futures::JsFuture::from(
         web_sys::window().unwrap().fetch_with_str(url.as_str()),
     )
     .await
-    .unwrap()
+    .map_err(|err| anyhow::anyhow!("{:?}", err))?
     .into();
 
-    let length = response.headers().get("content-length").unwrap().unwrap();
+    if !response.ok() {
+        return Err(anyhow::anyhow!(
+            "Bad fetch response:\nGot status code {} for {}",
+            response.status(),
+            url
+        ));
+    }
+
+    let length = response
+        .headers()
+        .get("content-length")
+        .map_err(|err| anyhow::anyhow!("{:?}", err))?
+        .unwrap();
+
     let length: u64 = length.parse().unwrap();
 
     log::info!(
@@ -983,20 +1006,24 @@ async fn fetch_bytes(url: &url::Url) -> Vec<u8> {
         length as f32 / 1024.0 / 1024.0
     );
 
+    response_body_async_reader(response)
+}
+
+async fn fetch_bytes(url: &url::Url) -> anyhow::Result<Vec<u8>> {
     use futures::AsyncReadExt;
 
-    let mut async_read = response_body_async_reader(response);
+    let mut async_reader = async_reader_from_fetch(url).await?;
 
     let mut buf = Vec::new();
 
-    async_read.read_to_end(&mut buf).await.unwrap();
+    async_reader.read_to_end(&mut buf).await?;
 
-    buf
+    Ok(buf)
 }
 
-pub type FetchedImages = std::collections::HashMap<url::Url, (Rc<Texture>, bool)>;
+pub(crate) type FetchedImages = std::collections::HashMap<url::Url, (Rc<Texture>, bool)>;
 
-pub fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
+pub(crate) fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
     let mut removed = 0;
 
     fetched_images.retain(|_, (texture_ref, _)| {
@@ -1073,9 +1100,9 @@ fn create_texture_with_first_mip_data(
     texture
 }
 
-pub struct Texture {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
+pub(crate) struct Texture {
+    pub(crate) texture: wgpu::Texture,
+    pub(crate) view: wgpu::TextureView,
 }
 
 impl Texture {

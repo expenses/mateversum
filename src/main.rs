@@ -12,8 +12,8 @@ mod assets;
 mod caching;
 
 use assets::{
-    load_gltf_from_url, load_single_pixel_image, prune_fetched_images, FetchedImages,
-    ModelLoadContext, ModelPrimitive,
+    async_reader_from_fetch, load_gltf_from_bytes, load_single_pixel_image,
+    prune_fetched_images, FetchedImages, ModelLoadContext, ModelPrimitive,
 };
 use caching::ResourceCache;
 
@@ -74,6 +74,17 @@ async fn run() {
 
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
+
+    let mut preloaded_model_data = Vec::new();
+
+    for model_url in &model_urls {
+        let url = url::Url::options()
+            .base_url(Some(&href))
+            .parse(model_url)
+            .unwrap();
+
+        preloaded_model_data.push((handle_error(async_reader_from_fetch(&url).await), url));
+    }
 
     let mode = futures::select! {
         _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
@@ -407,18 +418,17 @@ async fn run() {
 
     log::info!("urls: {:?}", model_urls);
 
-    for (i, model_url) in model_urls.iter().enumerate() {
-        let url = url::Url::options()
-            .base_url(Some(&href))
-            .parse(model_url)
-            .unwrap();
-
+    for (i, (mut async_reader, url)) in preloaded_model_data.into_iter().enumerate() {
         {
             let models = Rc::clone(&models);
             let context = Rc::clone(&context);
             wasm_bindgen_futures::spawn_local(async move {
-                let model = load_gltf_from_url(url, context).await;
-                models.borrow_mut()[i] = model;
+                use futures::AsyncReadExt;
+
+                let mut bytes = Vec::new();
+                async_reader.read_to_end(&mut bytes).await.unwrap();
+                let model = load_gltf_from_bytes(&bytes, Some(url), context).await;
+                models.borrow_mut()[i] = model.unwrap();
             });
         }
 
@@ -1057,6 +1067,18 @@ fn render_primitives<'a>(
 
             render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
             render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
+        }
+    }
+}
+
+fn handle_error<T>(result: anyhow::Result<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = web_sys::window()
+                .unwrap()
+                .alert_with_message(&error.to_string());
+            panic!()
         }
     }
 }
