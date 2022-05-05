@@ -377,7 +377,7 @@ async fn run() {
             &*device,
             &queue,
             wgpu::TextureFormat::Rgba8Unorm,
-            &[128, 255, 128, 255],
+            &[127, 127, 255, 255],
         ),
         white_image: load_single_pixel_image(
             &*device,
@@ -728,6 +728,28 @@ async fn run() {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let opaque_model_primitives: Vec<Vec<_>> = models
+            .iter()
+            .map(|model| {
+                model
+                    .opaque_primitives
+                    .iter()
+                    .map(|primitive| primitive.bind_group.borrow())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let alpha_clipped_model_primitives: Vec<Vec<_>> = models
+            .iter()
+            .map(|model| {
+                model
+                    .alpha_clipped_primitives
+                    .iter()
+                    .map(|primitive| primitive.bind_group.borrow())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("command encoder"),
         });
@@ -777,14 +799,18 @@ async fn run() {
             let mut instance_offset = 0;
 
             for (model_index, model) in models.iter().enumerate() {
-                for primitive in model.opaque_primitives.iter() {
+                for (primitive_index, primitive) in model.opaque_primitives.iter().enumerate() {
                     render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
                     render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
                     render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
                     render_pass
                         .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
 
-                    render_pass.set_bind_group(1, &primitive.bind_group, &[]);
+                    render_pass.set_bind_group(
+                        1,
+                        &opaque_model_primitives[model_index][primitive_index],
+                        &[],
+                    );
 
                     for (i, viewport) in viewports.iter().enumerate() {
                         render_pass.set_viewport(
@@ -813,14 +839,20 @@ async fn run() {
             let mut instance_offset = 0;
 
             for (model_index, model) in models.iter().enumerate() {
-                for primitive in model.alpha_clipped_primitives.iter() {
+                for (primitive_index, primitive) in
+                    model.alpha_clipped_primitives.iter().enumerate()
+                {
                     render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
                     render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
                     render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
                     render_pass
                         .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
 
-                    render_pass.set_bind_group(1, &primitive.bind_group, &[]);
+                    render_pass.set_bind_group(
+                        1,
+                        &alpha_clipped_model_primitives[model_index][primitive_index],
+                        &[],
+                    );
 
                     for (i, viewport) in viewports.iter().enumerate() {
                         render_pass.set_viewport(
