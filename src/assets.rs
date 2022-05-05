@@ -239,7 +239,7 @@ impl StagingModelPrimitive {
         });
 
         wasm_bindgen_futures::spawn_local({
-            let binding = Rc::clone(&textures.metallic_roughness_texture);
+            let binding = Rc::clone(&textures.emissive_texture);
             let context = Rc::clone(&texture_load_context);
             async move {
                 let material = context.gltf.materials().nth(material_index).unwrap();
@@ -762,6 +762,11 @@ fn load_standard_image_format(
         })
         .collect();
 
+    let source_view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
+        mip_level_count: Some(std::num::NonZeroU32::new(1).unwrap()),
+        ..Default::default()
+    });
+
     let mut encoder = context
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -849,56 +854,26 @@ fn load_standard_image_format(
     );
 
     for source_level in 0..mip_level_count - 1 {
-        let target_level = source_level + 1;
-
-        let mip_extent = wgpu::Extent3d {
-            width: image.width() >> target_level,
-            height: image.height() >> target_level,
-            depth_or_array_layers: 1,
-        };
-
-        let bind_group = if source_level == 0 {
-            let source_view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
-                mip_level_count: Some(std::num::NonZeroU32::new(1).unwrap()),
-                ..Default::default()
+        let bind_group = context
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&context.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(if source_level == 0 {
+                            &source_view
+                        } else {
+                            &temp_blit_textures[source_level as usize - 1].view
+                        }),
+                    },
+                ],
             });
-
-            context
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &pipeline.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Sampler(&context.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&source_view),
-                        },
-                    ],
-                })
-        } else {
-            context
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &pipeline.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Sampler(&context.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(
-                                &temp_blit_textures[source_level as usize - 1].view,
-                            ),
-                        },
-                    ],
-                })
-        };
 
         let temp_blit_texture = &temp_blit_textures[source_level as usize];
 
@@ -921,6 +896,8 @@ fn load_standard_image_format(
 
         drop(render_pass);
 
+        let target_level = source_level + 1;
+
         encoder.copy_texture_to_texture(
             wgpu::ImageCopyTexture {
                 texture: &temp_blit_texture.texture,
@@ -934,7 +911,11 @@ fn load_standard_image_format(
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            mip_extent,
+            wgpu::Extent3d {
+                width: image.width() >> target_level,
+                height: image.height() >> target_level,
+                depth_or_array_layers: 1,
+            },
         );
     }
 

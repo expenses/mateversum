@@ -62,7 +62,6 @@
         let exported = await crypto.subtle.exportKey("jwk", key_pair.publicKey);
 
         const peers = {};
-        let next_peer_index = 0;
 
         function contact_name(peer_id) {
             const key_id = peers[peer_id].key_id;
@@ -85,10 +84,7 @@
             peers[peer_id] = {
                 peer: peer,
                 key_id: await make_key_id(peer.key),
-                index: next_peer_index,
             };
-
-            next_peer_index += 1;
 
             console.log(`${contact_name(peer_id)} joined`);
         });
@@ -147,7 +143,7 @@
         };
 
         get_xr_data((data, peer_id) => {
-            handle_xr_data(data, peers[peer_id].index);
+            handle_xr_data(data, peer_id);
         });
 
         window.set_xr_data_handler = (func) => {

@@ -13,7 +13,7 @@ mod caching;
 
 use assets::{
     load_gltf_from_url, load_single_pixel_image, prune_fetched_images, FetchedImages,
-    ModelLoadContext,
+    ModelLoadContext, ModelPrimitive,
 };
 use caching::ResourceCache;
 
@@ -394,7 +394,7 @@ async fn run() {
         sampler: Rc::clone(&linear_sampler),
     });
 
-    let instances = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut instances = Vec::new();
     let mut instance_counts = Vec::new();
 
     let mut models = Vec::new();
@@ -422,16 +422,8 @@ async fn run() {
             });
         }
 
-        let mut instances = instances.borrow_mut();
-        if i == 1 {
-            instance_counts.push(4);
-            instances.push(Instance::default());
-            instances.push(Instance::default());
-            instances.push(Instance::default());
-            instances.push(Instance::default());
-        } else if i == 2 {
-            instance_counts.push(1);
-            instances.push(Instance::scaled(0.01));
+        if i == 1 || i == 2 {
+            instance_counts.push(0);
         } else {
             instance_counts.push(1);
             instances.push(Instance::default());
@@ -448,23 +440,31 @@ async fn run() {
             .unwrap()
             .into();
 
-    let instances_clone = Rc::clone(&instances);
-    let on_message = wasm_bindgen::closure::Closure::wrap(Box::new(
-        move |uint8: js_sys::Uint8Array, peer_index: u32| {
-            let mut bytes = [0; 96];
-            uint8.copy_to(&mut bytes);
-            if !bytes.is_empty() {
-                // Bytemuck panics with an alignment error if we try and cast to an instance.
-                let instances: &[Instance] = cast_slice(&bytes);
-                instances_clone.borrow_mut()[5] = instances[0];
-                instances_clone.borrow_mut()[3] = instances[1];
-                instances_clone.borrow_mut()[4] = instances[2];
-            } else {
-                log::info!("Got {} bytes; ignoring", bytes.len());
-            }
-        },
-    )
-        as Box<dyn FnMut(js_sys::Uint8Array, u32)>);
+    let player_states = Rc::new(RefCell::new(std::collections::HashMap::new()));
+    let on_message = {
+        let player_states = Rc::clone(&player_states);
+
+        wasm_bindgen::closure::Closure::wrap(Box::new(
+            move |uint8: js_sys::Uint8Array, peer_id: String| {
+                let mut bytes = [0; 96];
+                uint8.copy_to(&mut bytes);
+                if !bytes.is_empty() {
+                    // Bytemuck panics with an alignment error if we try and cast to an instance.
+                    let instances: &[Instance] = cast_slice(&bytes);
+                    player_states.borrow_mut().insert(
+                        peer_id,
+                        PlayerState {
+                            head: instances[0],
+                            hands: [instances[1], instances[2]],
+                        },
+                    );
+                } else {
+                    log::info!("Got {} bytes; ignoring", bytes.len());
+                }
+            },
+        )
+            as Box<dyn FnMut(js_sys::Uint8Array, String)>)
+    };
 
     setup_fn
         .call1(
@@ -477,9 +477,14 @@ async fn run() {
 
     let mut instance_buffer = ResizingBuffer::new(
         &device,
-        bytemuck::cast_slice(&instances.borrow()),
+        bytemuck::cast_slice(&instances),
         wgpu::BufferUsages::VERTEX,
     );
+
+    let mut player_heads_buffer =
+        ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3, wgpu::BufferUsages::VERTEX);
+    let mut player_hands_buffer =
+        ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3 * 2, wgpu::BufferUsages::VERTEX);
 
     let left_eye_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("left eye uniform buffer"),
@@ -560,6 +565,11 @@ async fn run() {
             None => return,
         };
 
+        let mut player_state = PlayerState {
+            head: Instance::from_transform(pose.transform(), 0.5),
+            hands: Default::default(),
+        };
+
         let input_sources = xr_session.input_sources();
 
         for i in 0..input_sources.length() {
@@ -569,19 +579,28 @@ async fn run() {
                 let grip_pose = frame.get_pose(&grip_space, &reference_space).unwrap();
                 let transform = grip_pose.transform();
                 let instance = Instance::from_transform(transform, 1.0);
-                instances.borrow_mut()[i as usize + 1] = instance;
+                player_state.hands[i as usize] = instance;
                 line_verts[i as usize * 2].position = instance.position;
             }
         }
 
-        let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
+        let player_heads: Vec<Instance> = player_states
+            .borrow()
+            .values()
+            .cloned()
+            .map(|state| state.head)
+            .collect();
 
-        struct Viewport {
-            x: f32,
-            y: f32,
-            width: f32,
-            height: f32,
-        }
+        player_heads_buffer.write(&device, &queue, bytemuck::cast_slice(&player_heads));
+
+        let player_hands: Vec<Instance> = std::iter::once(player_state.clone())
+            .chain(player_states.borrow().values().cloned())
+            .flat_map(|state| state.hands)
+            .collect();
+
+        player_hands_buffer.write(&device, &queue, bytemuck::cast_slice(&player_hands));
+
+        let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
 
         let viewports: Vec<_> = views
             .iter()
@@ -622,9 +641,9 @@ async fn run() {
 
             // Send the head transform to remotes.
             {
-                let mut head_transform = Instance::from_transform(pose.transform(), 0.5);
+                let mut head_transform = player_state.head;
                 head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
-                let instances = [head_transform, instances.borrow()[1], instances.borrow()[2]];
+                let instances = [head_transform, player_state.hands[0], player_state.hands[1]];
                 let bytes = bytemuck::cast_slice(&instances);
 
                 let uint8 = unsafe { js_sys::Uint8Array::view(bytes) };
@@ -654,7 +673,7 @@ async fn run() {
                 );
             }
 
-            instance_buffer.write(&device, &queue, bytemuck::cast_slice(&instances.borrow()));
+            instance_buffer.write(&device, &queue, bytemuck::cast_slice(&instances));
 
             queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
@@ -789,13 +808,7 @@ async fn run() {
             }),
         });
 
-        let uniform_bind_group = |i| {
-            if i == 0 {
-                &left_eye_bind_group
-            } else {
-                &right_eye_bind_group
-            }
-        };
+        let uniform_bind_groups = [&left_eye_bind_group, &right_eye_bind_group];
 
         {
             render_pass.set_pipeline(&pbr_pipeline);
@@ -805,80 +818,58 @@ async fn run() {
             let mut instance_offset = 0;
 
             for (model_index, model) in models.iter().enumerate() {
-                for (primitive_index, primitive) in model.opaque_primitives.iter().enumerate() {
-                    render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
-                    render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
-                    render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
-                    render_pass
-                        .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                    render_pass.set_bind_group(
-                        1,
-                        &opaque_model_primitives[model_index][primitive_index],
-                        &[],
-                    );
-
-                    for (i, viewport) in viewports.iter().enumerate() {
-                        render_pass.set_viewport(
-                            viewport.x,
-                            viewport.y,
-                            viewport.width,
-                            viewport.height,
-                            0.0,
-                            1.0,
-                        );
-
-                        render_pass.set_bind_group(0, uniform_bind_group(i), &[]);
-                        render_pass.draw_indexed(
-                            0..primitive.num_indices,
-                            0,
-                            instance_offset..instance_offset + instance_counts[model_index],
-                        );
-                    }
-                }
-
+                render_primitives(
+                    &mut render_pass,
+                    &model.opaque_primitives,
+                    &opaque_model_primitives[model_index],
+                    &viewports,
+                    &uniform_bind_groups,
+                    instance_offset..instance_offset + instance_counts[model_index],
+                );
                 instance_offset += instance_counts[model_index];
+            }
+
+            {
+                render_pass.set_vertex_buffer(3, player_heads_buffer.inner.slice(..));
+                let model_index = 2;
+                render_primitives(
+                    &mut render_pass,
+                    &models[model_index].opaque_primitives,
+                    &opaque_model_primitives[model_index],
+                    &viewports,
+                    &uniform_bind_groups,
+                    0..player_heads.len() as u32,
+                );
+            }
+
+            {
+                render_pass.set_vertex_buffer(3, player_hands_buffer.inner.slice(..));
+                let model_index = 1;
+                render_primitives(
+                    &mut render_pass,
+                    &models[model_index].opaque_primitives,
+                    &opaque_model_primitives[model_index],
+                    &viewports,
+                    &uniform_bind_groups,
+                    0..player_hands.len() as u32,
+                );
             }
 
             render_pass.set_pipeline(&pbr_alpha_clipped_pipeline);
 
+            render_pass.set_vertex_buffer(3, instance_buffer.inner.slice(..));
+
             let mut instance_offset = 0;
 
             for (model_index, model) in models.iter().enumerate() {
-                for (primitive_index, primitive) in
-                    model.alpha_clipped_primitives.iter().enumerate()
-                {
-                    render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
-                    render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
-                    render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
-                    render_pass
-                        .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
-
-                    render_pass.set_bind_group(
-                        1,
-                        &alpha_clipped_model_primitives[model_index][primitive_index],
-                        &[],
-                    );
-
-                    for (i, viewport) in viewports.iter().enumerate() {
-                        render_pass.set_viewport(
-                            viewport.x,
-                            viewport.y,
-                            viewport.width,
-                            viewport.height,
-                            0.0,
-                            1.0,
-                        );
-
-                        render_pass.set_bind_group(0, uniform_bind_group(i), &[]);
-                        render_pass.draw_indexed(
-                            0..primitive.num_indices,
-                            0,
-                            instance_offset..instance_offset + instance_counts[model_index],
-                        );
-                    }
-                }
-
+                render_primitives(
+                    &mut render_pass,
+                    &model.alpha_clipped_primitives,
+                    &alpha_clipped_model_primitives[model_index],
+                    &viewports,
+                    &uniform_bind_groups,
+                    instance_offset..instance_offset + instance_counts[model_index],
+                );
                 instance_offset += instance_counts[model_index];
             }
 
@@ -896,7 +887,7 @@ async fn run() {
                         1.0,
                     );
 
-                    render_pass.set_bind_group(0, uniform_bind_group(i), &[]);
+                    render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
                     render_pass.draw(0..4, 0..1);
                 }
             }
@@ -976,6 +967,23 @@ impl ResizingBuffer {
         }
     }
 
+    fn new_with_capacity(
+        device: &wgpu::Device,
+        capacity: usize,
+        usage: wgpu::BufferUsages,
+    ) -> Self {
+        Self {
+            capacity,
+            inner: device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: capacity as u64,
+                mapped_at_creation: false,
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+            }),
+            usage,
+        }
+    }
+
     fn write(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) {
         if bytes.len() > self.capacity {
             self.capacity = (self.capacity * 2).max(bytes.len());
@@ -1005,5 +1013,50 @@ fn cast_slice<F, T>(slice: &[F]) -> &[T] {
             slice.as_ptr() as *const T,
             (slice.len() * std::mem::size_of::<F>()) / std::mem::size_of::<T>(),
         )
+    }
+}
+
+#[derive(Clone)]
+struct PlayerState {
+    head: Instance,
+    hands: [Instance; 2],
+}
+
+struct Viewport {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+fn render_primitives<'a>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    primitives: &'a [ModelPrimitive],
+    bind_groups: &'a [std::cell::Ref<wgpu::BindGroup>],
+    viewports: &[Viewport],
+    uniform_bind_groups: &[&'a wgpu::BindGroup],
+    instance_range: std::ops::Range<u32>,
+) {
+    for (primitive_index, primitive) in primitives.iter().enumerate() {
+        render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
+        render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
+        render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
+        render_pass.set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+        render_pass.set_bind_group(1, &bind_groups[primitive_index], &[]);
+
+        for (i, viewport) in viewports.iter().enumerate() {
+            render_pass.set_viewport(
+                viewport.x,
+                viewport.y,
+                viewport.width,
+                viewport.height,
+                0.0,
+                1.0,
+            );
+
+            render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
+            render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
+        }
     }
 }
