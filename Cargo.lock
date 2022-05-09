@@ -62,6 +62,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.3.12"
+source = "git+https://github.com/indygreg/async-compression?branch=zstd-upgrade#d3dccc56d84a6856c0d0a7232c0e21f16e42ef8e"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "memchr",
+ "pin-project-lite",
+ "zstd",
+ "zstd-safe",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -91,9 +104,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
+name = "basis-universal"
+version = "0.1.1"
+source = "git+https://github.com/expenses/basis-universal-rs#9dfe48eedda08a24f70c86dfede341654e394594"
+dependencies = [
+ "basis-universal-sys",
+ "basis-universal-wasm",
+ "bitflags",
+ "js-sys",
+ "lazy_static",
+]
+
+[[package]]
+name = "basis-universal-sys"
+version = "0.1.1"
+source = "git+https://github.com/expenses/basis-universal-rs#9dfe48eedda08a24f70c86dfede341654e394594"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "basis-universal-wasm"
 version = "0.1.0"
-source = "git+https://github.com/expenses/basis-universal-rs-wasm#6e222197941f29e461c6277af02bcd7b9f06d446"
+source = "git+https://github.com/expenses/basis-universal-rs-wasm#009a82ceb80269d44a8419e483bd13a437e2dcd1"
 dependencies = [
  "js-sys",
  "once_cell",
@@ -939,8 +972,7 @@ dependencies = [
 [[package]]
 name = "ktx2"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87d65e08a9ec02e409d27a0139eaa6b9756b4d81fe7cde71f6941a83730ce838"
+source = "git+https://github.com/expenses/ktx2?branch=expose-more#829eaaa800051245a0231c20357b58b22ed1fa93"
 dependencies = [
  "bitflags",
 ]
@@ -1589,16 +1621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ruzstd"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cada0ef59efa6a5f4dc5e491f93d9f31e3fc7758df421ff1de8a706338e1100"
-dependencies = [
- "byteorder",
- "twox-hash",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1790,12 +1812,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
 name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1902,16 +1918,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d82e1a7758622a465f8cee077614c73484dac5b836c02ff6a40d5d1010324d7"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "twox-hash"
-version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee73e6e4924fe940354b8d4d98cad5231175d615cd855b758adc658c0aac6a0"
-dependencies = [
- "cfg-if 1.0.0",
- "static_assertions",
 ]
 
 [[package]]
@@ -2167,7 +2173,9 @@ name = "webxr-pbr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-compression",
  "base64 0.13.0",
+ "basis-universal",
  "basis-universal-wasm",
  "bytemuck",
  "console_error_panic_hook",
@@ -2183,7 +2191,6 @@ dependencies = [
  "js-sys",
  "ktx2",
  "log",
- "ruzstd",
  "shared-structs",
  "url",
  "wasm-bindgen",
@@ -2194,6 +2201,7 @@ dependencies = [
  "web-sys",
  "wgpu",
  "wgpu-hal",
+ "zstd",
 ]
 
 [[package]]
@@ -2415,3 +2423,32 @@ name = "xml-rs"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
+
+[[package]]
+name = "zstd"
+version = "0.11.1+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77a16b8414fde0414e90c612eba70985577451c4c504b99885ebed24762cb81a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "5.0.1+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c12659121420dd6365c5c3de4901f97145b79651fb1d25814020ed2ed0585ae"
+dependencies = [
+ "libc",
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.1+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
+dependencies = [
+ "cc",
+ "libc",
+]

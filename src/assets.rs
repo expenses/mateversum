@@ -1,6 +1,9 @@
 use crevice::std140::AsStd140;
+use futures::AsyncReadExt;
 use glam::{Vec2, Vec3};
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
@@ -19,17 +22,32 @@ pub(crate) struct ModelLoadContext {
     pub(crate) shader_cache: Rc<ResourceCache<wgpu::ShaderModule>>,
     pub(crate) pipeline_cache: Rc<ResourceCache<PipelineData>>,
     pub(crate) sampler: Rc<wgpu::Sampler>,
+    pub(crate) anisotropy_clamp: Option<std::num::NonZeroU8>,
 }
 
 struct ModelBuffers {
     map: std::collections::HashMap<usize, Vec<u8>>,
 }
 
+struct MaterialTexture {
+    texture: Rc<RefCell<Rc<Texture>>>,
+    sampler: Rc<RefCell<Rc<wgpu::Sampler>>>,
+}
+
+impl MaterialTexture {
+    fn new(texture: Rc<Texture>, context: &ModelLoadContext) -> Self {
+        Self {
+            texture: Rc::new(RefCell::new(texture)),
+            sampler: Rc::new(RefCell::new(Rc::clone(&context.sampler))),
+        }
+    }
+}
+
 struct MaterialTextures {
-    normal_texture: Rc<RefCell<Rc<Texture>>>,
-    albedo_texture: Rc<RefCell<Rc<Texture>>>,
-    metallic_roughness_texture: Rc<RefCell<Rc<Texture>>>,
-    emissive_texture: Rc<RefCell<Rc<Texture>>>,
+    normal_texture: MaterialTexture,
+    albedo_texture: MaterialTexture,
+    metallic_roughness_texture: MaterialTexture,
+    emissive_texture: MaterialTexture,
 }
 
 struct TextureLoadContext {
@@ -44,45 +62,23 @@ struct TextureLoadContext {
 
 async fn upload_model_texture_from_gltf(
     gltf_texture: &gltf::Texture<'_>,
-    binding: Rc<RefCell<Rc<Texture>>>,
+    binding: &MaterialTexture,
     srgb: bool,
     context: &TextureLoadContext,
 ) -> anyhow::Result<()> {
-    let texture = load_image_from_gltf(
-        &context.gltf,
-        gltf_texture,
-        srgb,
-        &context.buffers,
-        &context.context,
-        context.base_url.as_ref().as_ref(),
-    )
-    .await?;
+    let texture = load_image_from_gltf(context, gltf_texture, srgb, binding).await?;
 
-    update_model_texture(
-        texture,
-        binding,
+    *binding.texture.borrow_mut() = texture;
+
+    let new_bind_group = create_model_bind_group(
         &context.context,
         &context.textures,
         &context.material_settings,
-        Rc::clone(&context.bind_group),
     );
 
+    *context.bind_group.borrow_mut() = new_bind_group;
+
     Ok(())
-}
-
-fn update_model_texture(
-    texture: Rc<Texture>,
-    binding: Rc<RefCell<Rc<Texture>>>,
-    context: &ModelLoadContext,
-    textures: &Rc<MaterialTextures>,
-    material_settings: &wgpu::Buffer,
-    bind_group: Rc<RefCell<wgpu::BindGroup>>,
-) {
-    *binding.borrow_mut() = texture;
-
-    let new_bind_group = create_model_bind_group(context, textures, material_settings);
-
-    *bind_group.borrow_mut() = new_bind_group;
 }
 
 fn create_model_bind_group(
@@ -99,30 +95,54 @@ fn create_model_bind_group(
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(
-                        &textures.albedo_texture.borrow().view,
+                        &textures.albedo_texture.texture.borrow().view,
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(
-                        &textures.normal_texture.borrow().view,
+                        &textures.normal_texture.texture.borrow().view,
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(
-                        &textures.metallic_roughness_texture.borrow().view,
+                        &textures.metallic_roughness_texture.texture.borrow().view,
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(
-                        &textures.emissive_texture.borrow().view,
+                        &textures.emissive_texture.texture.borrow().view,
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: material_settings.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(
+                        &textures.albedo_texture.sampler.borrow(),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(
+                        &textures.normal_texture.sampler.borrow(),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(
+                        &textures.metallic_roughness_texture.sampler.borrow(),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(
+                        &textures.emissive_texture.sampler.borrow(),
+                    ),
                 },
             ],
         })
@@ -149,8 +169,6 @@ struct StagingModelPrimitive {
     material_settings: Rc<wgpu::Buffer>,
 }
 
-// todo:
-
 impl StagingModelPrimitive {
     fn upload(
         self,
@@ -160,12 +178,13 @@ impl StagingModelPrimitive {
         base_url: &Rc<Option<url::Url>>,
     ) -> ModelPrimitive {
         let textures = Rc::new(MaterialTextures {
-            albedo_texture: Rc::new(RefCell::new(Rc::clone(&context.white_image))),
-            normal_texture: Rc::new(RefCell::new(Rc::clone(&context.flat_normals_image))),
-            metallic_roughness_texture: Rc::new(RefCell::new(Rc::clone(
-                &context.default_metallic_roughness_image,
-            ))),
-            emissive_texture: Rc::new(RefCell::new(Rc::clone(&context.black_image))),
+            albedo_texture: MaterialTexture::new(Rc::clone(&context.white_image), context),
+            normal_texture: MaterialTexture::new(Rc::clone(&context.flat_normals_image), context),
+            metallic_roughness_texture: MaterialTexture::new(
+                Rc::clone(&context.default_metallic_roughness_image),
+                context,
+            ),
+            emissive_texture: MaterialTexture::new(Rc::clone(&context.black_image), context),
         });
 
         let material_index = self.material_index;
@@ -188,7 +207,7 @@ impl StagingModelPrimitive {
         });
 
         wasm_bindgen_futures::spawn_local({
-            let binding = Rc::clone(&textures.albedo_texture);
+            let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
                 let material = context.gltf.materials().nth(material_index).unwrap();
@@ -196,7 +215,7 @@ impl StagingModelPrimitive {
                 if let Some(albedo_texture) = pbr.base_color_texture() {
                     upload_model_texture_from_gltf(
                         &albedo_texture.texture(),
-                        binding,
+                        &textures.albedo_texture,
                         true,
                         &context,
                     )
@@ -207,14 +226,14 @@ impl StagingModelPrimitive {
         });
 
         wasm_bindgen_futures::spawn_local({
-            let binding = Rc::clone(&textures.normal_texture);
+            let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
                 let material = context.gltf.materials().nth(material_index).unwrap();
                 if let Some(normal_texture) = material.normal_texture() {
                     upload_model_texture_from_gltf(
                         &normal_texture.texture(),
-                        binding,
+                        &textures.normal_texture,
                         false,
                         &context,
                     )
@@ -225,7 +244,7 @@ impl StagingModelPrimitive {
         });
 
         wasm_bindgen_futures::spawn_local({
-            let binding = Rc::clone(&textures.metallic_roughness_texture);
+            let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
                 let material = context.gltf.materials().nth(material_index).unwrap();
@@ -233,7 +252,7 @@ impl StagingModelPrimitive {
                 if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
                     upload_model_texture_from_gltf(
                         &metallic_roughness_texture.texture(),
-                        binding,
+                        &textures.metallic_roughness_texture,
                         false,
                         &context,
                     )
@@ -244,14 +263,14 @@ impl StagingModelPrimitive {
         });
 
         wasm_bindgen_futures::spawn_local({
-            let binding = Rc::clone(&textures.emissive_texture);
+            let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
                 let material = context.gltf.materials().nth(material_index).unwrap();
                 if let Some(emissive_texture) = material.emissive_texture() {
                     upload_model_texture_from_gltf(
                         &emissive_texture.texture(),
-                        binding,
+                        &textures.emissive_texture,
                         true,
                         &context,
                     )
@@ -456,12 +475,10 @@ pub(crate) async fn load_gltf_from_bytes(
 }
 
 async fn load_image_from_gltf(
-    gltf: &gltf::Gltf,
+    context: &TextureLoadContext,
     texture: &gltf::Texture<'_>,
     srgb: bool,
-    buffers: &ModelBuffers,
-    context: &ModelLoadContext,
-    base_url: Option<&url::Url>,
+    binding: &MaterialTexture,
 ) -> anyhow::Result<Rc<Texture>> {
     let image = texture.source();
 
@@ -471,8 +488,9 @@ async fn load_image_from_gltf(
             let buffer = view.buffer();
 
             let buffer = match buffer.source() {
-                gltf::buffer::Source::Bin => gltf.blob.as_ref().unwrap(),
-                gltf::buffer::Source::Uri(_) => buffers
+                gltf::buffer::Source::Bin => context.gltf.blob.as_ref().unwrap(),
+                gltf::buffer::Source::Uri(_) => context
+                    .buffers
                     .map
                     .get(&buffer.index())
                     .map(|vec| &vec[..])
@@ -481,21 +499,35 @@ async fn load_image_from_gltf(
 
             let bytes = &buffer[view.offset()..view.offset() + view.length()];
 
-            Rc::new(load_image_from_mime_type(context, bytes, srgb, Some(mime_type)).await)
+            load_image_from_mime_type(
+                context,
+                ImageSource::Bytes(bytes),
+                srgb,
+                Some(mime_type),
+                binding,
+            )
+            .await?
         }
         gltf::image::Source::Uri { uri, mime_type } => {
-            let url = url::Url::options().base_url(base_url).parse(uri).unwrap();
+            let url = url::Url::options()
+                .base_url(context.base_url.as_ref().as_ref())
+                .parse(uri)
+                .unwrap();
 
             if url.scheme() == "data" {
                 let (_mime_type, data) = url.path().split_once(',').unwrap();
 
+                log::error!("Need to check mime type here. Does it indicate what file to load? Mime type: 1: {:?}, 2: {:?}", mime_type, _mime_type);
+
                 Rc::new(load_standard_image_format(
-                    context,
+                    &context.context,
                     &base64::decode(data).unwrap(),
                     srgb,
                 ))
             } else {
-                if let Some((image, cached_srgb)) = context.fetched_images.borrow().get(&url) {
+                if let Some((image, cached_srgb)) =
+                    context.context.fetched_images.borrow().get(&url)
+                {
                     if *cached_srgb == srgb {
                         return Ok(Rc::clone(image));
                     } else {
@@ -506,12 +538,19 @@ async fn load_image_from_gltf(
                     }
                 }
 
-                let bytes = fetch_bytes(&url).await?;
+                let url = Rc::new(url);
 
-                let image =
-                    Rc::new(load_image_from_mime_type(context, &bytes, srgb, mime_type).await);
+                let image = load_image_from_mime_type(
+                    context,
+                    ImageSource::Url(Rc::clone(&url)),
+                    srgb,
+                    mime_type,
+                    binding,
+                )
+                .await?;
 
                 context
+                    .context
                     .fetched_images
                     .borrow_mut()
                     .insert(url, (Rc::clone(&image), srgb));
@@ -522,24 +561,126 @@ async fn load_image_from_gltf(
     })
 }
 
+enum ImageSource<'a> {
+    Url(Rc<url::Url>),
+    Bytes(&'a [u8]),
+}
+
+impl<'a> ImageSource<'a> {
+    async fn get_bytes(&self) -> anyhow::Result<Cow<'a, [u8]>> {
+        Ok(match self {
+            Self::Url(url) => Cow::Owned(fetch_bytes(url).await?),
+            Self::Bytes(bytes) => Cow::Borrowed(bytes),
+        })
+    }
+}
+
 async fn load_image_from_mime_type(
-    context: &ModelLoadContext,
-    bytes: &[u8],
+    context: &TextureLoadContext,
+    source: ImageSource<'_>,
     srgb: bool,
     mime_type: Option<&str>,
-) -> Texture {
-    if mime_type == Some("image/ktx2") {
-        load_ktx2(&context.device, &context.queue, bytes)
+    binding: &MaterialTexture,
+) -> anyhow::Result<Rc<Texture>> {
+    Ok(if mime_type == Some("image/ktx2") {
+        match source {
+            ImageSource::Bytes(bytes) => Rc::new(load_ktx2(
+                &context.context.device,
+                &context.context.queue,
+                srgb,
+                context.context.supported_features,
+                bytes,
+            )),
+            ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await?,
+        }
     } else if mime_type == Some("image/x.basis") {
-        load_basis(
-            &context.device,
-            &context.queue,
-            context.supported_features,
-            bytes,
+        Rc::new(load_basis(
+            &context.context.device,
+            &context.context.queue,
+            context.context.supported_features,
+            &source.get_bytes().await?,
             srgb,
-        )
+        ))
     } else {
-        load_standard_image_format(context, bytes, srgb)
+        Rc::new(load_standard_image_format(
+            &context.context,
+            &source.get_bytes().await?,
+            srgb,
+        ))
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Format {
+    Etc2Rgba,
+    Bc7,
+    Astc,
+    Rgba,
+}
+
+impl Format {
+    fn new_from_features(features: wgpu::Features) -> Self {
+        if features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC_LDR) {
+            Self::Astc
+        } else if features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+            Self::Bc7
+        } else if features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2) {
+            Self::Etc2Rgba
+        } else {
+            Self::Rgba
+        }
+    }
+
+    fn as_transcoder_block_format(&self) -> basis_universal::TranscoderBlockFormat {
+        match self {
+            Self::Etc2Rgba => basis_universal::TranscoderBlockFormat::ETC2_RGBA,
+            Self::Bc7 => basis_universal::TranscoderBlockFormat::BC7,
+            Self::Astc => basis_universal::TranscoderBlockFormat::ASTC_4x4,
+            Self::Rgba => basis_universal::TranscoderBlockFormat::RGBA32,
+        }
+    }
+
+    fn as_transcoder_format(&self) -> basis_universal::TranscoderTextureFormat {
+        match self {
+            Self::Etc2Rgba => basis_universal::TranscoderTextureFormat::ETC2_RGBA,
+            Self::Bc7 => basis_universal::TranscoderTextureFormat::BC7_RGBA,
+            Self::Astc => basis_universal::TranscoderTextureFormat::ASTC_4x4_RGBA,
+            Self::Rgba => basis_universal::TranscoderTextureFormat::RGBA32,
+        }
+    }
+
+    fn as_wgpu(&self, srgb: bool) -> wgpu::TextureFormat {
+        match self {
+            Self::Etc2Rgba => {
+                if srgb {
+                    wgpu::TextureFormat::Etc2Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Etc2Rgba8Unorm
+                }
+            }
+            Self::Astc => wgpu::TextureFormat::Astc {
+                block: wgpu::AstcBlock::B4x4,
+                channel: if srgb {
+                    wgpu::AstcChannel::UnormSrgb
+                } else {
+                    wgpu::AstcChannel::Unorm
+                },
+            },
+            Self::Rgba => {
+                if srgb {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                }
+            }
+            Self::Bc7 => {
+                if srgb {
+                    wgpu::TextureFormat::Bc7RgbaUnormSrgb
+                } else {
+                    wgpu::TextureFormat::Bc7RgbaUnorm
+                }
+            }
+        }
     }
 }
 
@@ -555,20 +696,18 @@ fn load_basis(
     let file = basis_universal_wasm::BasisFile::new(&array);
 
     let image = 0;
-    let format = if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC_LDR) {
-        Format::Astc
-    } else if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
-        Format::Bc7
-    } else if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2) {
-        Format::Etc2Rgba
-    } else {
-        Format::Rgba
-    };
+    let format = Format::new_from_features(supported_features);
 
     let num_levels = file.get_num_levels(image);
 
     let total_transcoded_size: u32 = (0..num_levels)
-        .map(|level| file.get_image_transcoded_size_in_bytes(image, level, format as u32))
+        .map(|level| {
+            file.get_image_transcoded_size_in_bytes(
+                image,
+                level,
+                format.as_transcoder_format() as u32,
+            )
+        })
         .sum();
 
     let transcoded_data = vec![0; total_transcoded_size as usize];
@@ -578,7 +717,11 @@ fn load_basis(
     let mut offset = 0;
 
     for level in 0..num_levels {
-        let size = file.get_image_transcoded_size_in_bytes(image, level, format as u32);
+        let size = file.get_image_transcoded_size_in_bytes(
+            image,
+            level,
+            format.as_transcoder_format() as u32,
+        );
 
         let slice = unsafe {
             js_sys::Uint8Array::view(
@@ -588,57 +731,20 @@ fn load_basis(
 
         offset += size;
 
-        let res = file.transcode_image(&slice, image, level as u32, format as u32, 1, 0);
+        let res = file.transcode_image(
+            &slice,
+            image,
+            level as u32,
+            format.as_transcoder_format() as u32,
+            1,
+            0,
+        );
 
         assert_eq!(res, 1);
     }
 
     let width = file.get_image_width(image, 0);
     let height = file.get_image_height(image, 0);
-
-    #[derive(Clone, Copy, Debug)]
-    enum Format {
-        Etc2Rgba = 1,
-        Bc7 = 6,
-        Astc = 10,
-        Rgba = 13,
-    }
-
-    impl Format {
-        fn as_wgpu(&self, srgb: bool) -> wgpu::TextureFormat {
-            match self {
-                Self::Etc2Rgba => {
-                    if srgb {
-                        wgpu::TextureFormat::Etc2Rgba8UnormSrgb
-                    } else {
-                        wgpu::TextureFormat::Etc2Rgba8Unorm
-                    }
-                }
-                Self::Astc => wgpu::TextureFormat::Astc {
-                    block: wgpu::AstcBlock::B4x4,
-                    channel: if srgb {
-                        wgpu::AstcChannel::UnormSrgb
-                    } else {
-                        wgpu::AstcChannel::Unorm
-                    },
-                },
-                Self::Rgba => {
-                    if srgb {
-                        wgpu::TextureFormat::Rgba8UnormSrgb
-                    } else {
-                        wgpu::TextureFormat::Rgba8Unorm
-                    }
-                }
-                Self::Bc7 => {
-                    if srgb {
-                        wgpu::TextureFormat::Bc7RgbaUnormSrgb
-                    } else {
-                        wgpu::TextureFormat::Bc7RgbaUnorm
-                    }
-                }
-            }
-        }
-    }
 
     file.close();
     file.delete();
@@ -664,31 +770,254 @@ fn load_basis(
     ))
 }
 
-fn load_ktx2(device: &Rc<wgpu::Device>, queue: &wgpu::Queue, bytes: &[u8]) -> Texture {
-    let ktx2 = ktx2::Reader::new(bytes).unwrap();
-    let header = ktx2.header();
-    let mut levels = Vec::new();
+async fn load_ktx2_async(
+    context: &TextureLoadContext,
+    srgb: bool,
+    url: &Rc<url::Url>,
+    binding: &MaterialTexture,
+) -> anyhow::Result<Rc<Texture>> {
+    // todo:
+    // * At the moment it takes 3 round trips to load the first mip:
+    //   The header, the level indices and then the first mip data.
+    //
+    //   This is very slow on high-latency connections. Instead of
+    //   using range requests for these 3 pieces, we should instead
+    //   request the whole file and use an abort controller
+    //   to cancel it: https://javascript.info/fetch-abort.
+    //
+    // * We could also hide some of the latency while requesting the images
+    //   while loading the large geometry blob.
 
-    for level in ktx2.levels() {
-        match header.supercompression_scheme {
-            Some(ktx2::SupercompressionScheme::Zstandard) => {
-                use std::io::Read;
-                let mut cursor = std::io::Cursor::new(level);
-                let mut decoded = Vec::new();
-                ruzstd::StreamingDecoder::new(&mut cursor)
-                    .unwrap()
-                    .read_to_end(&mut decoded)
-                    .unwrap();
-                levels.push(std::borrow::Cow::Owned(decoded));
-            }
-            Some(other) => panic!("Unsupported: {:?}", other),
-            None => {
-                levels.push(std::borrow::Cow::Borrowed(level));
-            }
+    let mut header_bytes = [0; ktx2::Header::LENGTH];
+
+    async_reader_from_fetch(url, Some(0..ktx2::Header::LENGTH))
+        .await?
+        .read_exact(&mut header_bytes)
+        .await?;
+
+    log::info!("Read header of {}", url);
+
+    let header = ktx2::Header::from_bytes(&header_bytes);
+
+    header.validate()?;
+
+    let mut level_indices = Vec::with_capacity(header.level_count as usize);
+
+    {
+        let mut async_reader = async_reader_from_fetch(
+            url,
+            Some(
+                ktx2::Header::LENGTH
+                    ..ktx2::Header::LENGTH + ktx2::LevelIndex::LENGTH * header.level_count as usize,
+            ),
+        )
+        .await?;
+
+        log::info!("Started reading indices of {}", url);
+
+        for _ in 0..header.level_count {
+            let mut level_index_bytes = [0; ktx2::LevelIndex::LENGTH];
+
+            async_reader.read_exact(&mut level_index_bytes).await?;
+
+            level_indices.push(ktx2::LevelIndex::from_bytes(&level_index_bytes));
         }
     }
 
-    //let flattened: Vec<u8> = levels.iter().flat_map(|vec| vec.iter().cloned()).collect();
+    let transcoder = basis_universal::LowLevelUastcTranscoder::new();
+    let format = Format::new_from_features(context.context.supported_features);
+
+    let texture_descriptor = move || wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: header.pixel_width,
+            height: header.pixel_height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: header.level_count,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: format.as_wgpu(srgb),
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    };
+
+    // Create a sampler that will only display mip levels from `level` onwards.
+    let sampler_descriptor = move |level, context: &ModelLoadContext| wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        anisotropy_clamp: context.anisotropy_clamp,
+        lod_min_clamp: level as f32,
+        ..Default::default()
+    };
+
+    let texture = Rc::new(Texture::new(
+        context.context.device.create_texture(&texture_descriptor()),
+    ));
+
+    let mut levels = level_indices.into_iter().enumerate().rev();
+
+    // Load the smallest (1x1 pixel) mip first before returning the texture
+    {
+        let (i, level_index) = levels.next().unwrap();
+
+        let url = Rc::clone(url);
+        let textures = Rc::clone(&context.textures);
+        let material_settings = Rc::clone(&context.material_settings);
+        let bind_group = Rc::clone(&context.bind_group);
+        let context = Rc::clone(&context.context);
+        let texture = Rc::clone(&texture);
+        let sampler = Rc::clone(&binding.sampler);
+
+        let transcoded =
+            decompress_and_transcode(&url, i as u32, &level_index, &header, &transcoder, format)
+                .await
+                .unwrap();
+
+        write_bytes_to_texture(
+            &context.queue,
+            &texture.texture,
+            i as u32,
+            &transcoded,
+            &texture_descriptor(),
+        );
+
+        *sampler.borrow_mut() = Rc::new(
+            context
+                .device
+                .create_sampler(&sampler_descriptor(i, &context)),
+        );
+
+        let new_bind_group = create_model_bind_group(&context, &textures, &material_settings);
+
+        *bind_group.borrow_mut() = new_bind_group;
+    }
+
+    // Load all other mips in the background.
+    wasm_bindgen_futures::spawn_local({
+        let url = Rc::clone(url);
+        let textures = Rc::clone(&context.textures);
+        let material_settings = Rc::clone(&context.material_settings);
+        let bind_group = Rc::clone(&context.bind_group);
+        let context = Rc::clone(&context.context);
+        let texture = Rc::clone(&texture);
+        let sampler = Rc::clone(&binding.sampler);
+
+        async move {
+            for (i, level_index) in levels {
+                let transcoded = decompress_and_transcode(
+                    &url,
+                    i as u32,
+                    &level_index,
+                    &header,
+                    &transcoder,
+                    format,
+                )
+                .await
+                .unwrap();
+
+                write_bytes_to_texture(
+                    &context.queue,
+                    &texture.texture,
+                    i as u32,
+                    &transcoded,
+                    &texture_descriptor(),
+                );
+
+                *sampler.borrow_mut() = Rc::new(
+                    context
+                        .device
+                        .create_sampler(&sampler_descriptor(i, &context)),
+                );
+
+                let new_bind_group =
+                    create_model_bind_group(&context, &textures, &material_settings);
+
+                *bind_group.borrow_mut() = new_bind_group;
+            }
+        }
+    });
+
+    Ok(texture)
+}
+
+async fn decompress_and_transcode(
+    url: &url::Url,
+    level: u32,
+    level_index: &ktx2::LevelIndex,
+    header: &ktx2::Header,
+    transcoder: &basis_universal::LowLevelUastcTranscoder,
+    format: Format,
+) -> anyhow::Result<Vec<u8>> {
+    log::info!("Started level {} of {}", level, url);
+
+    let mut async_read = async_reader_from_fetch(
+        url,
+        Some(level_index.offset as usize..(level_index.offset + level_index.length_bytes) as usize),
+    )
+    .await?;
+
+    let decompressed = match header.supercompression_scheme {
+        Some(ktx2::SupercompressionScheme::Zstandard) => {
+            let level_reader = futures::io::BufReader::new(async_read);
+            let mut decoder = async_compression::futures::bufread::ZstdDecoder::new(level_reader);
+            read_num_bytes(&mut decoder, level_index.uncompressed_length_bytes as usize).await?
+        }
+        Some(other) => panic!("Unsupported: {:?}", other),
+        None => {
+            read_num_bytes(
+                &mut async_read,
+                level_index.uncompressed_length_bytes as usize,
+            )
+            .await?
+        }
+    };
+
+    let slice_width = header.pixel_width >> level;
+    let slice_height = header.pixel_height >> level;
+
+    let (block_width_pixels, block_height_pixels) = (4, 4);
+
+    let slice_parameters = basis_universal::SliceParametersUastc {
+        num_blocks_x: ((slice_width + block_width_pixels - 1) / block_width_pixels).max(1),
+        num_blocks_y: ((slice_height + block_height_pixels - 1) / block_height_pixels).max(1),
+        has_alpha: false,
+        original_width: slice_width,
+        original_height: slice_height,
+    };
+
+    transcoder
+        .transcode_slice(
+            &decompressed,
+            slice_parameters,
+            basis_universal::DecodeFlags::HIGH_QUALITY,
+            format.as_transcoder_block_format(),
+        )
+        .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
+}
+
+async fn read_num_bytes<R: futures::io::AsyncRead + std::marker::Unpin>(
+    reader: &mut R,
+    num_bytes: usize,
+) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(num_bytes);
+
+    reader.read_to_end(&mut bytes).await?;
+
+    Ok(bytes)
+}
+
+fn load_ktx2(
+    device: &Rc<wgpu::Device>,
+    queue: &wgpu::Queue,
+    srgb: bool,
+    supported_features: wgpu::Features,
+    bytes: &[u8],
+) -> Texture {
+    let ktx2 = ktx2::Reader::new(bytes).unwrap();
+    let header = ktx2.header();
 
     for dfd in ktx2.data_format_descriptors() {
         if dfd.header == ktx2::DataFormatDescriptorHeader::BASIC {
@@ -698,7 +1027,63 @@ fn load_ktx2(device: &Rc<wgpu::Device>, queue: &wgpu::Queue, bytes: &[u8]) -> Te
         }
     }
 
-    todo!();
+    let transcoder = basis_universal::LowLevelUastcTranscoder::new();
+    let format = Format::new_from_features(supported_features);
+
+    let texture_descriptor = &wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: header.pixel_width,
+            height: header.pixel_height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: header.level_count,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: format.as_wgpu(srgb),
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    };
+
+    let texture = device.create_texture(texture_descriptor);
+
+    let (block_width_pixels, block_height_pixels) = (4, 4);
+
+    for (i, level) in ktx2.levels().enumerate() {
+        let decompressed = match header.supercompression_scheme {
+            Some(ktx2::SupercompressionScheme::Zstandard) => {
+                let decompressed =
+                    zstd::bulk::decompress(level.bytes, level.uncompressed_length_bytes as usize)
+                        .unwrap();
+                std::borrow::Cow::Owned(decompressed)
+            }
+            Some(other) => panic!("Unsupported: {:?}", other),
+            None => std::borrow::Cow::Borrowed(level.bytes),
+        };
+
+        let slice_width = header.pixel_width >> i;
+        let slice_height = header.pixel_height >> i;
+
+        let slice_parameters = basis_universal::SliceParametersUastc {
+            num_blocks_x: ((slice_width + block_width_pixels - 1) / block_width_pixels).max(1),
+            num_blocks_y: ((slice_height + block_height_pixels - 1) / block_height_pixels).max(1),
+            has_alpha: false,
+            original_width: slice_width,
+            original_height: slice_height,
+        };
+
+        let transcoded = transcoder
+            .transcode_slice(
+                &decompressed,
+                slice_parameters,
+                basis_universal::DecodeFlags::HIGH_QUALITY,
+                format.as_transcoder_block_format(),
+            )
+            .unwrap();
+
+        write_bytes_to_texture(queue, &texture, i as u32, &transcoded, texture_descriptor);
+    }
+
+    Texture::new(texture)
 }
 
 fn load_standard_image_format(
@@ -976,9 +1361,25 @@ fn response_body_async_reader(
 
 pub(crate) async fn async_reader_from_fetch(
     url: &url::Url,
+    byte_range: Option<std::ops::Range<usize>>,
 ) -> anyhow::Result<impl futures::io::AsyncRead> {
+    let mut request_init = web_sys::RequestInit::new();
+
+    if let Some(byte_range) = byte_range {
+        let headers = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &headers,
+            &"Range".into(),
+            &format!("bytes={}-{}", byte_range.start, byte_range.end).into(),
+        )
+        .map_err(|err| anyhow::anyhow!("Js Error: {:?}", err))?;
+        request_init.headers(&headers);
+    }
+
     let response: web_sys::Response = wasm_bindgen_futures::JsFuture::from(
-        web_sys::window().unwrap().fetch_with_str(url.as_str()),
+        web_sys::window()
+            .unwrap()
+            .fetch_with_str_and_init(url.as_str(), &request_init),
     )
     .await
     .map_err(|err| anyhow::anyhow!("{:?}", err))?
@@ -1010,9 +1411,7 @@ pub(crate) async fn async_reader_from_fetch(
 }
 
 async fn fetch_bytes(url: &url::Url) -> anyhow::Result<Vec<u8>> {
-    use futures::AsyncReadExt;
-
-    let mut async_reader = async_reader_from_fetch(url).await?;
+    let mut async_reader = async_reader_from_fetch(url, None).await?;
 
     let mut buf = Vec::new();
 
@@ -1021,7 +1420,7 @@ async fn fetch_bytes(url: &url::Url) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-pub(crate) type FetchedImages = std::collections::HashMap<url::Url, (Rc<Texture>, bool)>;
+pub(crate) type FetchedImages = std::collections::HashMap<Rc<url::Url>, (Rc<Texture>, bool)>;
 
 pub(crate) fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
     let mut removed = 0;
@@ -1046,6 +1445,41 @@ fn mip_levels_for_image_size(width: u32, height: u32) -> u32 {
     (width.max(height) as f32).log2() as u32 + 1
 }
 
+fn write_bytes_to_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    mip: u32,
+    bytes: &[u8],
+    desc: &wgpu::TextureDescriptor,
+) {
+    let format_info = desc.format.describe();
+
+    let mip_size = desc.mip_level_size(mip).unwrap();
+
+    let mip_physical = mip_size.physical_size(desc.format);
+
+    let width_blocks = mip_physical.width / format_info.block_dimensions.0 as u32;
+    let height_blocks = mip_physical.height / format_info.block_dimensions.1 as u32;
+
+    let bytes_per_row = width_blocks * format_info.block_size as u32;
+
+    queue.write_texture(
+        wgpu::ImageCopyTexture {
+            texture,
+            mip_level: mip,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytes,
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(NonZeroU32::new(bytes_per_row).expect("invalid bytes per row")),
+            rows_per_image: Some(NonZeroU32::new(height_blocks).expect("invalid height")),
+        },
+        mip_physical,
+    );
+}
+
 // Like the following, except without trying to write subsequent mips.
 // https://github.com/gfx-rs/wgpu/blob/0b61a191244da0f0d987d53614a6698097a7622f/wgpu/src/util/device.rs#L79-L146
 fn create_texture_with_first_mip_data(
@@ -1054,8 +1488,6 @@ fn create_texture_with_first_mip_data(
     desc: &wgpu::TextureDescriptor,
     data: &[u8],
 ) -> wgpu::Texture {
-    use std::num::NonZeroU32;
-
     // Implicitly add the COPY_DST usage
     let mut desc = desc.to_owned();
     desc.usage |= wgpu::TextureUsages::COPY_DST;

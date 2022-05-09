@@ -4,7 +4,7 @@ use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_webxr_helpers::{button_click_future, create_button};
 use wgpu::util::DeviceExt;
 
@@ -12,8 +12,8 @@ mod assets;
 mod caching;
 
 use assets::{
-    async_reader_from_fetch, load_gltf_from_bytes, load_single_pixel_image,
-    prune_fetched_images, FetchedImages, ModelLoadContext, ModelPrimitive,
+    async_reader_from_fetch, load_gltf_from_bytes, load_single_pixel_image, prune_fetched_images,
+    FetchedImages, ModelLoadContext, ModelPrimitive,
 };
 use caching::ResourceCache;
 
@@ -83,7 +83,7 @@ async fn run() {
             .parse(model_url)
             .unwrap();
 
-        preloaded_model_data.push((handle_error(async_reader_from_fetch(&url).await), url));
+        preloaded_model_data.push((handle_error(async_reader_from_fetch(&url, None).await), url));
     }
 
     let mode = futures::select! {
@@ -169,19 +169,19 @@ async fn run() {
         anisotrophic_filtering_level: Some(AnisotrophicFilteringLevel::L16),
     };
 
-    let linear_sampler = Rc::new(
-        device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            anisotropy_clamp: performance_settings
-                .anisotrophic_filtering_level
-                .map(|level| std::num::NonZeroU8::new(level as u8).unwrap()),
-            ..Default::default()
-        }),
-    );
+    let anisotropy_clamp = performance_settings
+        .anisotrophic_filtering_level
+        .map(|level| std::num::NonZeroU8::new(level as u8).unwrap());
+
+    let linear_sampler = Rc::new(device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        anisotropy_clamp,
+        ..Default::default()
+    }));
 
     let uniform_entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
         binding,
@@ -205,16 +205,18 @@ async fn run() {
         },
     };
 
+    let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        count: None,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+    };
+
     let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("uniform bind group layout"),
         entries: &[
             uniform_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                count: None,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            },
+            sampler_entry(1),
         ],
     });
 
@@ -227,6 +229,10 @@ async fn run() {
                 texture_entry(2),
                 texture_entry(3),
                 uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+                sampler_entry(5),
+                sampler_entry(6),
+                sampler_entry(7),
+                sampler_entry(8),
             ],
         }),
     );
@@ -368,7 +374,6 @@ async fn run() {
     });
 
     basis_universal_wasm::wasm_init().await.unwrap();
-    basis_universal_wasm::initialize_basis();
 
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
@@ -403,6 +408,7 @@ async fn run() {
         shader_cache: Rc::clone(&shader_cache),
         pipeline_cache: Default::default(),
         sampler: Rc::clone(&linear_sampler),
+        anisotropy_clamp,
     });
 
     let mut instances = Vec::new();

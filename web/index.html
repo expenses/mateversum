@@ -13,7 +13,7 @@
         };
 
         window.onunhandledrejection = event => {
-            console.warn(`Unhandled rejection: ${event.reason}`);
+            alert(`Unhandled rejection: ${event.reason}`);
         };
 
         const selfId = trystero.selfId;

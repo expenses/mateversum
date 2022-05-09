@@ -22,16 +22,17 @@ wgpu-hal = "0.12.0"
 base64 = "0.13.0"
 js-sys = "0.3.57"
 url = "2.2.2"
-ktx2 = "0.3.0"
-ruzstd = "0.2.4"
+ktx2 = { git = "https://github.com/expenses/ktx2", branch = "expose-more" }
 crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
 wasm-bindgen = { version = "0.2.80", features = ["enable-interning"] }
 wasm-streams = "0.2.2"
-
 wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
 basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-wasm" }
 elsa = "1.7.0"
 anyhow = "1.0.57"
+basis-universal = { git = "https://github.com/expenses/basis-universal-rs" }
+zstd = { version = "0.11.1", default-features = false, features = ["wasm"] }
+async-compression = { version = "0.3.12", features = ["futures-io", "zstd"] }
 
 [dependencies.web-sys]
 version = "0.3.36"
@@ -97,6 +98,7 @@ js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fix
 glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-framebuffer" }
 wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
+async-compression = { git = "https://github.com/indygreg/async-compression", branch = "zstd-upgrade" }
 
 [workspace]
 members = [
