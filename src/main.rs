@@ -40,7 +40,13 @@ async fn run() {
     let href = url::Url::parse(&href).unwrap();
 
     let mut model_urls = vec![
-        Cow::Borrowed("glTF-Sample-Models/2.0/Sponza/glTF/Sponza.gltf"),
+        Cow::Borrowed(
+            "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_Main_Blender_glTF.gltf",
+        ),
+        Cow::Borrowed("https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_Curtains_glTF.gltf"),
+        Cow::Borrowed(
+            "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_CypressTree_glTF.gltf",
+        ),
         Cow::Borrowed("controller_model/controller.gltf"),
         Cow::Borrowed("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf"),
     ];
@@ -438,7 +444,7 @@ async fn run() {
             });
         }
 
-        if i == 1 || i == 2 {
+        if i == 3 || i == 4 {
             instance_counts.push(0);
         } else {
             instance_counts.push(1);

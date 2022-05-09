@@ -795,8 +795,6 @@ async fn load_ktx2_async(
         .read_exact(&mut header_bytes)
         .await?;
 
-    log::info!("Read header of {}", url);
-
     let header = ktx2::Header::from_bytes(&header_bytes);
 
     header.validate()?;
@@ -812,8 +810,6 @@ async fn load_ktx2_async(
             ),
         )
         .await?;
-
-        log::info!("Started reading indices of {}", url);
 
         for _ in 0..header.level_count {
             let mut level_index_bytes = [0; ktx2::LevelIndex::LENGTH];
@@ -951,8 +947,6 @@ async fn decompress_and_transcode(
     transcoder: &basis_universal::LowLevelUastcTranscoder,
     format: Format,
 ) -> anyhow::Result<Vec<u8>> {
-    log::info!("Started level {} of {}", level, url);
-
     let mut async_read = async_reader_from_fetch(
         url,
         Some(level_index.offset as usize..(level_index.offset + level_index.length_bytes) as usize),
