@@ -4,6 +4,7 @@ use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
+use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_webxr_helpers::{button_click_future, create_button};
 use wgpu::util::DeviceExt;
@@ -17,6 +18,7 @@ use assets::{
 };
 use caching::ResourceCache;
 
+#[derive(Clone, Copy)]
 enum AnisotrophicFilteringLevel {
     L2 = 2,
     L4 = 4,
@@ -26,15 +28,42 @@ enum AnisotrophicFilteringLevel {
 
 struct PerformanceSettings {
     anisotrophic_filtering_level: Option<AnisotrophicFilteringLevel>,
+    max_texture_size: u32,
 }
 
-async fn run() {
-    std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+impl PerformanceSettings {
+    fn anisotropy_clamp(&self) -> Option<std::num::NonZeroU8> {
+        self.anisotrophic_filtering_level
+            .map(|level| std::num::NonZeroU8::new(level as u8).unwrap())
+    }
+}
 
-    let level: log::Level = wasm_web_helpers::parse_url_query_string_from_window("RUST_LOG")
-        .and_then(|x| x.parse().ok())
-        .unwrap_or(log::Level::Info);
-    console_log::init_with_level(level).expect("could not initialize logger");
+// Code that's ran on init for every thread, both the main thread and web workers.
+#[wasm_bindgen(start)]
+pub fn main() {
+    // todo: fetch the log level from the url like before.
+    let _ = console_log::init_with_level(log::Level::Info);
+    ::console_error_panic_hook::set_once();
+
+    // Put the basis universal wasm blob into the global scope.
+    wasm_bindgen_futures::spawn_local(async move {
+        let module = basis_universal_wasm::Module::new().await;
+
+        let global = js_sys::global();
+
+        js_sys::Reflect::set(&global, &"basis".into(), &module).unwrap();
+
+        // We need to initialize it here because otherwise the basis_universal crate
+        // will only let you do so once across all threads.
+        basis_universal_wasm::initialize_basis();
+    })
+}
+
+#[wasm_bindgen]
+pub async fn run() {
+    let thread_pool = wasm_futures_executor::ThreadPool::max_threads()
+        .await
+        .unwrap();
 
     let href = web_sys::window().unwrap().location().href().unwrap();
     let href = url::Url::parse(&href).unwrap();
@@ -173,11 +202,8 @@ async fn run() {
 
     let performance_settings = PerformanceSettings {
         anisotrophic_filtering_level: Some(AnisotrophicFilteringLevel::L16),
+        max_texture_size: 1024,
     };
-
-    let anisotropy_clamp = performance_settings
-        .anisotrophic_filtering_level
-        .map(|level| std::num::NonZeroU8::new(level as u8).unwrap());
 
     let linear_sampler = Rc::new(device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
@@ -185,7 +211,7 @@ async fn run() {
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         mipmap_filter: wgpu::FilterMode::Linear,
-        anisotropy_clamp,
+        anisotropy_clamp: performance_settings.anisotropy_clamp(),
         ..Default::default()
     }));
 
@@ -379,8 +405,6 @@ async fn run() {
         multiview: Default::default(),
     });
 
-    basis_universal_wasm::wasm_init().await.unwrap();
-
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
         queue: Rc::clone(&queue),
@@ -414,7 +438,8 @@ async fn run() {
         shader_cache: Rc::clone(&shader_cache),
         pipeline_cache: Default::default(),
         sampler: Rc::clone(&linear_sampler),
-        anisotropy_clamp,
+        performance_settings,
+        thread_pool,
     });
 
     let mut instances = Vec::new();
@@ -919,10 +944,6 @@ async fn run() {
 
         queue.submit(std::iter::once(encoder.finish()));
     });
-}
-
-fn main() {
-    wasm_bindgen_futures::spawn_local(run());
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]

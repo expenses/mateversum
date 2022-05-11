@@ -126,13 +126,11 @@ dependencies = [
 [[package]]
 name = "basis-universal-wasm"
 version = "0.1.0"
-source = "git+https://github.com/expenses/basis-universal-rs-wasm#009a82ceb80269d44a8419e483bd13a437e2dcd1"
 dependencies = [
  "js-sys",
  "once_cell",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -1912,6 +1910,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
+name = "tokio"
+version = "1.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4903bf0427cf68dddd5aa6a93220756f8be0c34fcfa9f5e6191e103e15a31395"
+dependencies = [
+ "pin-project-lite",
+]
+
+[[package]]
 name = "toml"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2051,6 +2058,20 @@ dependencies = [
 name = "wasm-bindgen-shared"
 version = "0.2.80"
 source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#ca661ccea53c7180ef07fc9e7a986a0348ea8f17"
+
+[[package]]
+name = "wasm-futures-executor"
+version = "0.2.0"
+dependencies = [
+ "futures",
+ "js-sys",
+ "log",
+ "parking_lot 0.12.0",
+ "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
 
 [[package]]
 name = "wasm-streams"
@@ -2195,6 +2216,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-futures-executor",
  "wasm-streams",
  "wasm-web-helpers",
  "wasm-webxr-helpers",

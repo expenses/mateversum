@@ -3,6 +3,9 @@ name = "webxr-pbr"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
 console_error_panic_hook = "0.1.7"
 console_log = "0.2.0"
@@ -33,6 +36,7 @@ anyhow = "1.0.57"
 basis-universal = { git = "https://github.com/expenses/basis-universal-rs" }
 zstd = { version = "0.11.1", default-features = false, features = ["wasm"] }
 async-compression = { version = "0.3.12", features = ["futures-io", "zstd"] }
+wasm-futures-executor = { path = "../wasm-futures-executor" }
 
 [dependencies.web-sys]
 version = "0.3.36"
@@ -99,6 +103,9 @@ glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-fr
 wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 async-compression = { git = "https://github.com/indygreg/async-compression", branch = "zstd-upgrade" }
+
+[patch."https://github.com/expenses/basis-universal-rs-wasm"]
+basis-universal-wasm = { path = "../basis-universal-rs-wasm" }
 
 [workspace]
 members = [

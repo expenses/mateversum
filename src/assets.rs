@@ -1,3 +1,4 @@
+use crate::PerformanceSettings;
 use crevice::std140::AsStd140;
 use futures::AsyncReadExt;
 use glam::{Vec2, Vec3};
@@ -22,7 +23,8 @@ pub(crate) struct ModelLoadContext {
     pub(crate) shader_cache: Rc<ResourceCache<wgpu::ShaderModule>>,
     pub(crate) pipeline_cache: Rc<ResourceCache<PipelineData>>,
     pub(crate) sampler: Rc<wgpu::Sampler>,
-    pub(crate) anisotropy_clamp: Option<std::num::NonZeroU8>,
+    pub(crate) performance_settings: PerformanceSettings,
+    pub(crate) thread_pool: wasm_futures_executor::ThreadPool,
 }
 
 struct ModelBuffers {
@@ -347,6 +349,7 @@ pub(crate) async fn load_gltf_from_bytes(
                 if url.scheme() == "data" {
                     let (mime_type, data) = url.path().split_once(',').unwrap();
                     log::info!("Got: {}", mime_type);
+                    log::error!("Loading buffers from base64 is deprecated!");
                     buffers
                         .map
                         .insert(buffer.index(), base64::decode(data).unwrap());
@@ -499,6 +502,8 @@ async fn load_image_from_gltf(
 
             let bytes = &buffer[view.offset()..view.offset() + view.length()];
 
+            log::error!("Loading images from embedded bytes is deprecated!");
+
             load_image_from_mime_type(
                 context,
                 ImageSource::Bytes(bytes),
@@ -517,7 +522,7 @@ async fn load_image_from_gltf(
             if url.scheme() == "data" {
                 let (_mime_type, data) = url.path().split_once(',').unwrap();
 
-                log::error!("Need to check mime type here. Does it indicate what file to load? Mime type: 1: {:?}, 2: {:?}", mime_type, _mime_type);
+                log::error!("loading textures from base64 is deprecated!");
 
                 Rc::new(load_standard_image_format(
                     &context.context,
@@ -594,6 +599,8 @@ async fn load_image_from_mime_type(
             ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await?,
         }
     } else if mime_type == Some("image/x.basis") {
+        log::error!("Loading .basis files is deprecated!");
+
         Rc::new(load_basis(
             &context.context.device,
             &context.context.queue,
@@ -602,6 +609,8 @@ async fn load_image_from_mime_type(
             srgb,
         ))
     } else {
+        log::error!("Loading standard jpg/pngs is deprecated!");
+
         Rc::new(load_standard_image_format(
             &context.context,
             &source.get_bytes().await?,
@@ -788,6 +797,13 @@ async fn load_ktx2_async(
     // * We could also hide some of the latency while requesting the images
     //   while loading the large geometry blob.
 
+    fn downscaling_for_max_size(texture_size: u32, max_size: u32) -> u32 {
+        let texture_size_log = (texture_size as f32).log2();
+        let max_size_log = (max_size as f32).log2();
+
+        (texture_size_log as u32).saturating_sub(max_size_log as u32)
+    }
+
     let mut header_bytes = [0; ktx2::Header::LENGTH];
 
     async_reader_from_fetch(url, Some(0..ktx2::Header::LENGTH))
@@ -798,6 +814,12 @@ async fn load_ktx2_async(
     let header = ktx2::Header::from_bytes(&header_bytes);
 
     header.validate()?;
+
+    let down_scaling_level = downscaling_for_max_size(
+        header.pixel_width.max(header.pixel_width),
+        context.context.performance_settings.max_texture_size,
+    )
+    .min(header.level_count - 1);
 
     let mut level_indices = Vec::with_capacity(header.level_count as usize);
 
@@ -826,11 +848,11 @@ async fn load_ktx2_async(
     let texture_descriptor = move || wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
-            width: header.pixel_width,
-            height: header.pixel_height,
+            width: header.pixel_width >> down_scaling_level,
+            height: header.pixel_height >> down_scaling_level,
             depth_or_array_layers: 1,
         },
-        mip_level_count: header.level_count,
+        mip_level_count: header.level_count - down_scaling_level,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: format.as_wgpu(srgb),
@@ -844,7 +866,7 @@ async fn load_ktx2_async(
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         mipmap_filter: wgpu::FilterMode::Linear,
-        anisotropy_clamp: context.anisotropy_clamp,
+        anisotropy_clamp: context.performance_settings.anisotropy_clamp(),
         lod_min_clamp: level as f32,
         ..Default::default()
     };
@@ -867,15 +889,21 @@ async fn load_ktx2_async(
         let texture = Rc::clone(&texture);
         let sampler = Rc::clone(&binding.sampler);
 
-        let transcoded =
-            decompress_and_transcode(&url, i as u32, &level_index, &header, &transcoder, format)
-                .await
-                .unwrap();
+        let transcoded = decompress_and_transcode(
+            &url,
+            i as u32,
+            level_index,
+            header,
+            &context.thread_pool,
+            format,
+        )
+        .await
+        .unwrap();
 
         write_bytes_to_texture(
             &context.queue,
             &texture.texture,
-            i as u32,
+            i as u32 - down_scaling_level,
             &transcoded,
             &texture_descriptor(),
         );
@@ -903,12 +931,16 @@ async fn load_ktx2_async(
 
         async move {
             for (i, level_index) in levels {
+                if i < down_scaling_level as usize {
+                    return;
+                }
+
                 let transcoded = decompress_and_transcode(
                     &url,
                     i as u32,
-                    &level_index,
-                    &header,
-                    &transcoder,
+                    level_index,
+                    header,
+                    &context.thread_pool,
                     format,
                 )
                 .await
@@ -917,7 +949,7 @@ async fn load_ktx2_async(
                 write_bytes_to_texture(
                     &context.queue,
                     &texture.texture,
-                    i as u32,
+                    i as u32 - down_scaling_level,
                     &transcoded,
                     &texture_descriptor(),
                 );
@@ -942,54 +974,60 @@ async fn load_ktx2_async(
 async fn decompress_and_transcode(
     url: &url::Url,
     level: u32,
-    level_index: &ktx2::LevelIndex,
-    header: &ktx2::Header,
-    transcoder: &basis_universal::LowLevelUastcTranscoder,
+    level_index: ktx2::LevelIndex,
+    header: ktx2::Header,
+    thread_pool: &wasm_futures_executor::ThreadPool,
     format: Format,
 ) -> anyhow::Result<Vec<u8>> {
+    let transcoder = basis_universal::LowLevelUastcTranscoder::new();
+
     let mut async_read = async_reader_from_fetch(
         url,
         Some(level_index.offset as usize..(level_index.offset + level_index.length_bytes) as usize),
     )
     .await?;
 
-    let decompressed = match header.supercompression_scheme {
-        Some(ktx2::SupercompressionScheme::Zstandard) => {
-            let level_reader = futures::io::BufReader::new(async_read);
-            let mut decoder = async_compression::futures::bufread::ZstdDecoder::new(level_reader);
-            read_num_bytes(&mut decoder, level_index.uncompressed_length_bytes as usize).await?
-        }
-        Some(other) => panic!("Unsupported: {:?}", other),
-        None => {
-            read_num_bytes(
-                &mut async_read,
-                level_index.uncompressed_length_bytes as usize,
-            )
-            .await?
-        }
-    };
+    let bytes = read_num_bytes(&mut async_read, level_index.length_bytes as usize).await?;
 
-    let slice_width = header.pixel_width >> level;
-    let slice_height = header.pixel_height >> level;
+    thread_pool
+        .spawn(async move {
+            let decompressed = match header.supercompression_scheme {
+                Some(ktx2::SupercompressionScheme::Zstandard) => {
+                    let uncompressed_length_bytes = level_index.uncompressed_length_bytes;
 
-    let (block_width_pixels, block_height_pixels) = (4, 4);
+                    let mut decoder = async_compression::futures::bufread::ZstdDecoder::new(
+                        futures::io::Cursor::new(&bytes),
+                    );
+                    read_num_bytes(&mut decoder, uncompressed_length_bytes as usize).await?
+                }
+                Some(other) => panic!("Unsupported: {:?}", other),
+                None => bytes,
+            };
 
-    let slice_parameters = basis_universal::SliceParametersUastc {
-        num_blocks_x: ((slice_width + block_width_pixels - 1) / block_width_pixels).max(1),
-        num_blocks_y: ((slice_height + block_height_pixels - 1) / block_height_pixels).max(1),
-        has_alpha: false,
-        original_width: slice_width,
-        original_height: slice_height,
-    };
+            let slice_width = header.pixel_width >> level;
+            let slice_height = header.pixel_height >> level;
 
-    transcoder
-        .transcode_slice(
-            &decompressed,
-            slice_parameters,
-            basis_universal::DecodeFlags::HIGH_QUALITY,
-            format.as_transcoder_block_format(),
-        )
-        .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
+            let (block_width_pixels, block_height_pixels) = (4, 4);
+
+            let slice_parameters = basis_universal::SliceParametersUastc {
+                num_blocks_x: ((slice_width + block_width_pixels - 1) / block_width_pixels).max(1),
+                num_blocks_y: ((slice_height + block_height_pixels - 1) / block_height_pixels)
+                    .max(1),
+                has_alpha: false,
+                original_width: slice_width,
+                original_height: slice_height,
+            };
+
+            transcoder
+                .transcode_slice(
+                    &decompressed,
+                    slice_parameters,
+                    basis_universal::DecodeFlags::HIGH_QUALITY,
+                    format.as_transcoder_block_format(),
+                )
+                .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
+        })
+        .await?
 }
 
 async fn read_num_bytes<R: futures::io::AsyncRead + std::marker::Unpin>(
