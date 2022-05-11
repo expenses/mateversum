@@ -868,7 +868,6 @@ async fn load_ktx2_async(
         }
     }
 
-    let transcoder = basis_universal::LowLevelUastcTranscoder::new();
     let format = Format::new_from_features(context.context.supported_features);
 
     let texture_descriptor = move || wgpu::TextureDescriptor {
@@ -916,17 +915,23 @@ async fn load_ktx2_async(
         let sampler = Arc::clone(&binding.sampler);
 
         let transcoded =
-            decompress_and_transcode(&url, i as u32, &level_index, &header, &transcoder, format)
+            decompress_and_transcode(&url, i as u32, &level_index, &header, &context.device, format)
                 .await
                 .unwrap();
 
-        write_bytes_to_texture(
-            &context.queue,
-            &texture.texture,
-            i as u32,
-            &transcoded,
-            &texture_descriptor(),
-        );
+        context.device.call({
+            let queue = context.queue.clone();
+
+            move |_| {
+                write_bytes_to_texture(
+                    &queue,
+                    &texture.texture,
+                    i as u32,
+                    &transcoded,
+                    &texture_descriptor(),
+                )
+            }
+        });
 
         let new_sampler = context
             .device
@@ -959,19 +964,27 @@ async fn load_ktx2_async(
                         i as u32,
                         &level_index,
                         &header,
-                        &transcoder,
+                        &model_context.device,
+                        //&transcoder,
                         format,
                     )
                     .await
                     .unwrap();
 
-                    write_bytes_to_texture(
-                        &model_context.queue,
-                        &texture.texture,
-                        i as u32,
-                        &transcoded,
-                        &texture_descriptor(),
-                    );
+                    model_context.device.call({
+                        let queue = model_context.queue.clone();
+                        let texture = texture.clone();
+            
+                        move |_| {
+                            write_bytes_to_texture(
+                                &queue,
+                                &texture.texture,
+                                i as u32,
+                                &transcoded,
+                                &texture_descriptor(),
+                            )
+                        }
+                    });
 
                     *sampler.lock() = Arc::new(
                         model_context
@@ -996,7 +1009,8 @@ async fn decompress_and_transcode(
     level: u32,
     level_index: &ktx2::LevelIndex,
     header: &ktx2::Header,
-    transcoder: &basis_universal::LowLevelUastcTranscoder,
+    device: &ThreadSafeDevice,
+    //transcoder: &basis_universal::LowLevelUastcTranscoder,
     format: Format,
 ) -> anyhow::Result<Vec<u8>> {
     let mut async_read = async_reader_from_fetch(
@@ -1034,7 +1048,10 @@ async fn decompress_and_transcode(
         original_height: slice_height,
     };
 
-    transcoder
+    device.call(move |_| {
+        let transcoder = basis_universal::LowLevelUastcTranscoder::new();
+
+        transcoder
         .transcode_slice(
             &decompressed,
             slice_parameters,
@@ -1042,6 +1059,7 @@ async fn decompress_and_transcode(
             format.as_transcoder_block_format(),
         )
         .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
+    }).unwrap()
 }
 
 async fn read_num_bytes<R: futures::io::AsyncRead + std::marker::Unpin>(
@@ -1148,6 +1166,8 @@ fn load_standard_image_format(
     } else {
         wgpu::TextureFormat::Rgba8Unorm
     };
+
+    log::error!("load_standard_image_format called");
 
     let texture = Texture::new(create_texture_with_first_mip_data(
         &context.device,

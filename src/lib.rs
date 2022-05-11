@@ -60,8 +60,8 @@ pub async fn run() {
         Cow::Borrowed(
             "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_CypressTree_glTF.gltf",
         ),
-        Cow::Borrowed("controller_model/controller.gltf"),
-        Cow::Borrowed("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf"),
+        //Cow::Borrowed("controller_model/controller.gltf"),
+        //Cow::Borrowed("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf"),
     ];
 
     let mut no_sponza = false;
@@ -482,7 +482,7 @@ pub async fn run() {
             .unwrap()
             .into();
 
-    let player_states = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
+    let player_states: Arc<parking_lot::Mutex<std::collections::HashMap<String, PlayerState>>> = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
     let on_message = {
         let player_states = Arc::clone(&player_states);
 
@@ -493,13 +493,13 @@ pub async fn run() {
                 if !bytes.is_empty() {
                     // Bytemuck panics with an alignment error if we try and cast to an instance.
                     let instances: &[Instance] = cast_slice(&bytes);
-                    player_states.lock().insert(
+                    /*player_states.lock().insert(
                         peer_id,
                         PlayerState {
                             head: instances[0],
                             hands: [instances[1], instances[2]],
                         },
-                    );
+                    );*/
                 } else {
                     log::info!("Got {} bytes; ignoring", bytes.len());
                 }
@@ -946,6 +946,9 @@ pub async fn run() {
         drop(render_pass);
 
         queue.submit(std::iter::once(encoder.finish()));
+
+        std::mem::forget(texture);
+        std::mem::forget(depth);
     });
 
     log::error!("FORGETTING");
