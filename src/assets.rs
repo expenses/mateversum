@@ -1,3 +1,4 @@
+use crate::ThreadSafeDevice;
 use crevice::std140::AsStd140;
 use futures::AsyncReadExt;
 use glam::{Vec2, Vec3};
@@ -5,24 +6,26 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::caching::{PipelineData, ResourceCache};
 
 pub(crate) struct ModelLoadContext {
-    pub(crate) device: Rc<wgpu::Device>,
-    pub(crate) queue: Rc<wgpu::Queue>,
-    pub(crate) fetched_images: Rc<RefCell<FetchedImages>>,
-    pub(crate) model_bgl: Rc<wgpu::BindGroupLayout>,
-    pub(crate) black_image: Rc<Texture>,
-    pub(crate) white_image: Rc<Texture>,
-    pub(crate) flat_normals_image: Rc<Texture>,
-    pub(crate) default_metallic_roughness_image: Rc<Texture>,
+    pub(crate) device: Arc<ThreadSafeDevice>,
+    pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) fetched_images: Arc<parking_lot::Mutex<FetchedImages>>,
+    pub(crate) model_bgl: Arc<wgpu::BindGroupLayout>,
+    pub(crate) black_image: Arc<Texture>,
+    pub(crate) white_image: Arc<Texture>,
+    pub(crate) flat_normals_image: Arc<Texture>,
+    pub(crate) default_metallic_roughness_image: Arc<Texture>,
     pub(crate) supported_features: wgpu::Features,
-    pub(crate) shader_cache: Rc<ResourceCache<wgpu::ShaderModule>>,
-    pub(crate) pipeline_cache: Rc<ResourceCache<PipelineData>>,
-    pub(crate) sampler: Rc<wgpu::Sampler>,
+    pub(crate) shader_cache: Arc<ResourceCache<wgpu::ShaderModule>>,
+    pub(crate) pipeline_cache: Arc<ResourceCache<PipelineData>>,
+    pub(crate) sampler: Arc<wgpu::Sampler>,
     pub(crate) anisotropy_clamp: Option<std::num::NonZeroU8>,
+    pub(crate) thread_pool: wasm_futures_executor::ThreadPool,
 }
 
 struct ModelBuffers {
@@ -30,15 +33,15 @@ struct ModelBuffers {
 }
 
 struct MaterialTexture {
-    texture: Rc<RefCell<Rc<Texture>>>,
-    sampler: Rc<RefCell<Rc<wgpu::Sampler>>>,
+    texture: Arc<parking_lot::Mutex<Arc<Texture>>>,
+    sampler: Arc<parking_lot::Mutex<Arc<wgpu::Sampler>>>,
 }
 
 impl MaterialTexture {
-    fn new(texture: Rc<Texture>, context: &ModelLoadContext) -> Self {
+    fn new(texture: Arc<Texture>, context: &ModelLoadContext) -> Self {
         Self {
-            texture: Rc::new(RefCell::new(texture)),
-            sampler: Rc::new(RefCell::new(Rc::clone(&context.sampler))),
+            texture: Arc::new(parking_lot::Mutex::new(texture)),
+            sampler: Arc::new(parking_lot::Mutex::new(Arc::clone(&context.sampler))),
         }
     }
 }
@@ -51,13 +54,13 @@ struct MaterialTextures {
 }
 
 struct TextureLoadContext {
-    gltf: Rc<gltf::Gltf>,
-    context: Rc<ModelLoadContext>,
-    buffers: Rc<ModelBuffers>,
-    textures: Rc<MaterialTextures>,
-    material_settings: Rc<wgpu::Buffer>,
-    bind_group: Rc<RefCell<wgpu::BindGroup>>,
-    base_url: Rc<Option<url::Url>>,
+    gltf: Arc<gltf::Gltf>,
+    context: Arc<ModelLoadContext>,
+    buffers: Arc<ModelBuffers>,
+    textures: Arc<MaterialTextures>,
+    material_settings: Arc<wgpu::Buffer>,
+    bind_group: Arc<parking_lot::Mutex<wgpu::BindGroup>>,
+    base_url: Arc<Option<url::Url>>,
 }
 
 async fn upload_model_texture_from_gltf(
@@ -68,7 +71,7 @@ async fn upload_model_texture_from_gltf(
 ) -> anyhow::Result<()> {
     let texture = load_image_from_gltf(context, gltf_texture, srgb, binding).await?;
 
-    *binding.texture.borrow_mut() = texture;
+    *binding.texture.lock() = texture;
 
     let new_bind_group = create_model_bind_group(
         &context.context,
@@ -76,76 +79,83 @@ async fn upload_model_texture_from_gltf(
         &context.material_settings,
     );
 
-    *context.bind_group.borrow_mut() = new_bind_group;
+    *context.bind_group.lock() = new_bind_group;
 
     Ok(())
 }
 
 fn create_model_bind_group(
     context: &ModelLoadContext,
-    textures: &MaterialTextures,
-    material_settings: &wgpu::Buffer,
+    textures: &Arc<MaterialTextures>,
+    material_settings: &Arc<wgpu::Buffer>,
 ) -> wgpu::BindGroup {
+    let model_bgl = context.model_bgl.clone();
+    let material_settings = material_settings.clone();
+    let textures = textures.clone();
+
     context
         .device
-        .create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &context.model_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &textures.albedo_texture.texture.borrow().view,
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &textures.normal_texture.texture.borrow().view,
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &textures.metallic_roughness_texture.texture.borrow().view,
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        &textures.emissive_texture.texture.borrow().view,
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: material_settings.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(
-                        &textures.albedo_texture.sampler.borrow(),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(
-                        &textures.normal_texture.sampler.borrow(),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(
-                        &textures.metallic_roughness_texture.sampler.borrow(),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::Sampler(
-                        &textures.emissive_texture.sampler.borrow(),
-                    ),
-                },
-            ],
+        .call(move |device| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &model_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &textures.albedo_texture.texture.lock().view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &textures.normal_texture.texture.lock().view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &textures.metallic_roughness_texture.texture.lock().view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(
+                            &textures.emissive_texture.texture.lock().view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: material_settings.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::Sampler(
+                            &textures.albedo_texture.sampler.lock(),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Sampler(
+                            &textures.normal_texture.sampler.lock(),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::Sampler(
+                            &textures.metallic_roughness_texture.sampler.lock(),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::Sampler(
+                            &textures.emissive_texture.sampler.lock(),
+                        ),
+                    },
+                ],
+            })
         })
+        .unwrap()
 }
 
 pub(crate) struct ModelPrimitive {
@@ -153,11 +163,11 @@ pub(crate) struct ModelPrimitive {
     pub(crate) positions: wgpu::Buffer,
     pub(crate) normals: wgpu::Buffer,
     pub(crate) uvs: wgpu::Buffer,
-    pub(crate) bind_group: Rc<RefCell<wgpu::BindGroup>>,
+    pub(crate) bind_group: Arc<parking_lot::Mutex<wgpu::BindGroup>>,
     pub(crate) num_indices: u32,
-    // We hold handles onto the used textures here, so that when the model is dropped, the `Rc::strong_count`
+    // We hold handles onto the used textures here, so that when the model is dropped, the `Arc::strong_count`
     // of the textures goes down. Then we are able to unload the textures from GPU memory by `HashMap::retain`ing the fetched images..
-    _textures: Rc<MaterialTextures>,
+    _textures: Arc<MaterialTextures>,
 }
 
 struct StagingModelPrimitive {
@@ -166,153 +176,176 @@ struct StagingModelPrimitive {
     normals: Vec<Vec3>,
     uvs: Vec<Vec2>,
     material_index: usize,
-    material_settings: Rc<wgpu::Buffer>,
+    material_settings: Arc<wgpu::Buffer>,
 }
 
 impl StagingModelPrimitive {
     fn upload(
         self,
-        gltf: &Rc<gltf::Gltf>,
-        context: &Rc<ModelLoadContext>,
-        buffers: &Rc<ModelBuffers>,
-        base_url: &Rc<Option<url::Url>>,
+        gltf: &Arc<gltf::Gltf>,
+        context: &Arc<ModelLoadContext>,
+        buffers: &Arc<ModelBuffers>,
+        base_url: &Arc<Option<url::Url>>,
     ) -> ModelPrimitive {
-        let textures = Rc::new(MaterialTextures {
-            albedo_texture: MaterialTexture::new(Rc::clone(&context.white_image), context),
-            normal_texture: MaterialTexture::new(Rc::clone(&context.flat_normals_image), context),
+        let textures = Arc::new(MaterialTextures {
+            albedo_texture: MaterialTexture::new(Arc::clone(&context.white_image), context),
+            normal_texture: MaterialTexture::new(Arc::clone(&context.flat_normals_image), context),
             metallic_roughness_texture: MaterialTexture::new(
-                Rc::clone(&context.default_metallic_roughness_image),
+                Arc::clone(&context.default_metallic_roughness_image),
                 context,
             ),
-            emissive_texture: MaterialTexture::new(Rc::clone(&context.black_image), context),
+            emissive_texture: MaterialTexture::new(Arc::clone(&context.black_image), context),
         });
 
         let material_index = self.material_index;
         let material_settings = self.material_settings;
 
-        let bind_group = Rc::new(RefCell::new(create_model_bind_group(
+        let bind_group = Arc::new(parking_lot::Mutex::new(create_model_bind_group(
             context,
             &textures,
             &material_settings,
         )));
 
-        let texture_load_context = Rc::new(TextureLoadContext {
-            gltf: Rc::clone(gltf),
-            context: Rc::clone(context),
-            buffers: Rc::clone(buffers),
-            textures: Rc::clone(&textures),
-            material_settings: Rc::clone(&material_settings),
-            bind_group: Rc::clone(&bind_group),
-            base_url: Rc::clone(base_url),
+        let texture_load_context = Arc::new(TextureLoadContext {
+            gltf: Arc::clone(gltf),
+            context: Arc::clone(context),
+            buffers: Arc::clone(buffers),
+            textures: Arc::clone(&textures),
+            material_settings: Arc::clone(&material_settings),
+            bind_group: Arc::clone(&bind_group),
+            base_url: Arc::clone(base_url),
         });
 
-        wasm_bindgen_futures::spawn_local({
-            let textures = Rc::clone(&textures);
-            let context = Rc::clone(&texture_load_context);
-            async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(albedo_texture) = pbr.base_color_texture() {
-                    upload_model_texture_from_gltf(
-                        &albedo_texture.texture(),
-                        &textures.albedo_texture,
-                        true,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
-                }
+        context.thread_pool.spawn_lazy({
+            let textures = Arc::clone(&textures);
+            let texture_load_context = Arc::clone(&texture_load_context);
+
+            move || {
+                Box::pin(async move {
+                    let material = texture_load_context
+                        .gltf
+                        .materials()
+                        .nth(material_index)
+                        .unwrap();
+                    let pbr = material.pbr_metallic_roughness();
+                    if let Some(albedo_texture) = pbr.base_color_texture() {
+                        upload_model_texture_from_gltf(
+                            &albedo_texture.texture(),
+                            &textures.albedo_texture,
+                            true,
+                            &texture_load_context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                })
             }
         });
 
-        wasm_bindgen_futures::spawn_local({
-            let textures = Rc::clone(&textures);
-            let context = Rc::clone(&texture_load_context);
-            async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                if let Some(normal_texture) = material.normal_texture() {
-                    upload_model_texture_from_gltf(
-                        &normal_texture.texture(),
-                        &textures.normal_texture,
-                        false,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
-                }
+        context.thread_pool.spawn_lazy({
+            let textures = Arc::clone(&textures);
+            let texture_load_context = Arc::clone(&texture_load_context);
+
+            move || {
+                Box::pin(async move {
+                    let material = texture_load_context
+                        .gltf
+                        .materials()
+                        .nth(material_index)
+                        .unwrap();
+                    if let Some(normal_texture) = material.normal_texture() {
+                        upload_model_texture_from_gltf(
+                            &normal_texture.texture(),
+                            &textures.normal_texture,
+                            false,
+                            &texture_load_context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                })
             }
         });
 
-        wasm_bindgen_futures::spawn_local({
-            let textures = Rc::clone(&textures);
-            let context = Rc::clone(&texture_load_context);
-            async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
-                    upload_model_texture_from_gltf(
-                        &metallic_roughness_texture.texture(),
-                        &textures.metallic_roughness_texture,
-                        false,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
-                }
+        context.thread_pool.spawn_lazy({
+            let textures = Arc::clone(&textures);
+            let texture_load_context = Arc::clone(&texture_load_context);
+
+            move || {
+                Box::pin(async move {
+                    let material = texture_load_context
+                        .gltf
+                        .materials()
+                        .nth(material_index)
+                        .unwrap();
+                    let pbr = material.pbr_metallic_roughness();
+                    if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
+                        upload_model_texture_from_gltf(
+                            &metallic_roughness_texture.texture(),
+                            &textures.metallic_roughness_texture,
+                            false,
+                            &texture_load_context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                })
             }
         });
 
-        wasm_bindgen_futures::spawn_local({
-            let textures = Rc::clone(&textures);
-            let context = Rc::clone(&texture_load_context);
-            async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                if let Some(emissive_texture) = material.emissive_texture() {
-                    upload_model_texture_from_gltf(
-                        &emissive_texture.texture(),
-                        &textures.emissive_texture,
-                        true,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
-                }
+        context.thread_pool.spawn_lazy({
+            let textures = Arc::clone(&textures);
+            let texture_load_context = Arc::clone(&texture_load_context);
+
+            move || {
+                Box::pin(async move {
+                    let material = texture_load_context
+                        .gltf
+                        .materials()
+                        .nth(material_index)
+                        .unwrap();
+                    if let Some(emissive_texture) = material.emissive_texture() {
+                        upload_model_texture_from_gltf(
+                            &emissive_texture.texture(),
+                            &textures.emissive_texture,
+                            true,
+                            &texture_load_context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                })
             }
         });
 
-        ModelPrimitive {
-            bind_group,
-            num_indices: self.indices.len() as u32,
-            indices: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        context
+            .device
+            .call(move |device| ModelPrimitive {
+                bind_group,
+                num_indices: self.indices.len() as u32,
+                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("indices"),
                     contents: bytemuck::cast_slice(&self.indices),
                     usage: wgpu::BufferUsages::INDEX,
                 }),
-            positions: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                positions: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("positions"),
                     contents: bytemuck::cast_slice(&self.positions),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-            normals: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                normals: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("normals"),
                     contents: bytemuck::cast_slice(&self.normals),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-            uvs: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                uvs: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("uvs"),
                     contents: bytemuck::cast_slice(&self.uvs),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-            _textures: textures,
-        }
+                _textures: textures,
+            })
+            .unwrap()
     }
 }
 
@@ -325,9 +358,10 @@ pub(crate) struct Model {
 pub(crate) async fn load_gltf_from_bytes(
     bytes: &[u8],
     base_url: Option<url::Url>,
-    context: Rc<ModelLoadContext>,
+    context: Arc<ModelLoadContext>,
 ) -> anyhow::Result<Model> {
     let gltf = gltf::Gltf::from_slice(bytes).unwrap();
+    let gltf = Arc::new(gltf);
 
     let mut buffers = ModelBuffers {
         map: Default::default(),
@@ -385,23 +419,28 @@ pub(crate) async fn load_gltf_from_bytes(
                         positions: Default::default(),
                         normals: Default::default(),
                         uvs: Default::default(),
-                        material_settings: Rc::new(
+                        material_settings: Arc::new({
+                            let data = shared_structs::MaterialSettings {
+                                base_color_factor: pbr.base_color_factor().into(),
+                                emissive_factor: material.emissive_factor().into(),
+                                metallic_factor: pbr.metallic_factor(),
+                                roughness_factor: pbr.roughness_factor(),
+                            }
+                            .as_std140();
+
                             context
                                 .device
-                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("material settings"),
-                                    contents: bytemuck::bytes_of(
-                                        &shared_structs::MaterialSettings {
-                                            base_color_factor: pbr.base_color_factor().into(),
-                                            emissive_factor: material.emissive_factor().into(),
-                                            metallic_factor: pbr.metallic_factor(),
-                                            roughness_factor: pbr.roughness_factor(),
-                                        }
-                                        .as_std140(),
-                                    ),
-                                    usage: wgpu::BufferUsages::UNIFORM,
-                                }),
-                        ),
+                                .call(move |device| {
+                                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("material settings"),
+                                        contents: bytemuck::bytes_of(
+                                            &data,
+                                        ),
+                                        usage: wgpu::BufferUsages::UNIFORM,
+                                    })
+                                })
+                                .unwrap()
+                        }),
                         material_index: material.index().unwrap_or(0),
                     })
                 }
@@ -443,9 +482,8 @@ pub(crate) async fn load_gltf_from_bytes(
         }
     }
 
-    let buffers = Rc::new(buffers);
-    let gltf = Rc::new(gltf);
-    let base_url = Rc::new(base_url);
+    let buffers = Arc::new(buffers);
+    let base_url = Arc::new(base_url);
 
     let mut opaque_primitives_vec = Vec::new();
     let mut alpha_clipped_primitives_vec = Vec::new();
@@ -479,7 +517,7 @@ async fn load_image_from_gltf(
     texture: &gltf::Texture<'_>,
     srgb: bool,
     binding: &MaterialTexture,
-) -> anyhow::Result<Rc<Texture>> {
+) -> anyhow::Result<Arc<Texture>> {
     let image = texture.source();
 
     Ok(match image.source() {
@@ -519,17 +557,16 @@ async fn load_image_from_gltf(
 
                 log::error!("Need to check mime type here. Does it indicate what file to load? Mime type: 1: {:?}, 2: {:?}", mime_type, _mime_type);
 
-                Rc::new(load_standard_image_format(
+                Arc::new(load_standard_image_format(
                     &context.context,
                     &base64::decode(data).unwrap(),
                     srgb,
                 ))
             } else {
-                if let Some((image, cached_srgb)) =
-                    context.context.fetched_images.borrow().get(&url)
+                if let Some((image, cached_srgb)) = context.context.fetched_images.lock().get(&url)
                 {
                     if *cached_srgb == srgb {
-                        return Ok(Rc::clone(image));
+                        return Ok(Arc::clone(image));
                     } else {
                         log::warn!(
                             "Same URL image is used twice, in both srgb and non-srgb formats: {}",
@@ -538,11 +575,11 @@ async fn load_image_from_gltf(
                     }
                 }
 
-                let url = Rc::new(url);
+                let url = Arc::new(url);
 
                 let image = load_image_from_mime_type(
                     context,
-                    ImageSource::Url(Rc::clone(&url)),
+                    ImageSource::Url(Arc::clone(&url)),
                     srgb,
                     mime_type,
                     binding,
@@ -552,8 +589,8 @@ async fn load_image_from_gltf(
                 context
                     .context
                     .fetched_images
-                    .borrow_mut()
-                    .insert(url, (Rc::clone(&image), srgb));
+                    .lock()
+                    .insert(url, (Arc::clone(&image), srgb));
 
                 image
             }
@@ -562,7 +599,7 @@ async fn load_image_from_gltf(
 }
 
 enum ImageSource<'a> {
-    Url(Rc<url::Url>),
+    Url(Arc<url::Url>),
     Bytes(&'a [u8]),
 }
 
@@ -581,20 +618,23 @@ async fn load_image_from_mime_type(
     srgb: bool,
     mime_type: Option<&str>,
     binding: &MaterialTexture,
-) -> anyhow::Result<Rc<Texture>> {
+) -> anyhow::Result<Arc<Texture>> {
     Ok(if mime_type == Some("image/ktx2") {
         match source {
-            ImageSource::Bytes(bytes) => Rc::new(load_ktx2(
-                &context.context.device,
-                &context.context.queue,
-                srgb,
-                context.context.supported_features,
-                bytes,
-            )),
+            ImageSource::Bytes(bytes) => Arc::new(
+                load_ktx2(
+                    &context.context.device,
+                    &context.context.queue,
+                    srgb,
+                    context.context.supported_features,
+                    bytes,
+                )
+                .await?,
+            ),
             ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await?,
         }
     } else if mime_type == Some("image/x.basis") {
-        Rc::new(load_basis(
+        Arc::new(load_basis(
             &context.context.device,
             &context.context.queue,
             context.context.supported_features,
@@ -602,7 +642,7 @@ async fn load_image_from_mime_type(
             srgb,
         ))
     } else {
-        Rc::new(load_standard_image_format(
+        Arc::new(load_standard_image_format(
             &context.context,
             &source.get_bytes().await?,
             srgb,
@@ -685,7 +725,7 @@ impl Format {
 }
 
 fn load_basis(
-    device: &Rc<wgpu::Device>,
+    device: &Arc<ThreadSafeDevice>,
     queue: &wgpu::Queue,
     supported_features: wgpu::Features,
     bytes: &[u8],
@@ -751,31 +791,39 @@ fn load_basis(
 
     let format = format.as_wgpu(srgb);
 
-    Texture::new(device.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: num_levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        },
-        &transcoded_data,
-    ))
+    /*Texture::new(
+        device
+            .call(move |device| {
+                device.create_texture_with_data(
+                    queue,
+                    &wgpu::TextureDescriptor {
+                        label: None,
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: num_levels,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    },
+                    &transcoded_data,
+                )
+            })
+            .unwrap(),
+    )*/
+
+    panic!()
 }
 
 async fn load_ktx2_async(
     context: &TextureLoadContext,
     srgb: bool,
-    url: &Rc<url::Url>,
+    url: &Arc<url::Url>,
     binding: &MaterialTexture,
-) -> anyhow::Result<Rc<Texture>> {
+) -> anyhow::Result<Arc<Texture>> {
     // todo:
     // * At the moment it takes 3 round trips to load the first mip:
     //   The header, the level indices and then the first mip data.
@@ -849,7 +897,7 @@ async fn load_ktx2_async(
         ..Default::default()
     };
 
-    let texture = Rc::new(Texture::new(
+    let texture = Arc::new(Texture::new(
         context.context.device.create_texture(&texture_descriptor()),
     ));
 
@@ -859,13 +907,13 @@ async fn load_ktx2_async(
     {
         let (i, level_index) = levels.next().unwrap();
 
-        let url = Rc::clone(url);
-        let textures = Rc::clone(&context.textures);
-        let material_settings = Rc::clone(&context.material_settings);
-        let bind_group = Rc::clone(&context.bind_group);
-        let context = Rc::clone(&context.context);
-        let texture = Rc::clone(&texture);
-        let sampler = Rc::clone(&binding.sampler);
+        let url = Arc::clone(url);
+        let textures = Arc::clone(&context.textures);
+        let material_settings = Arc::clone(&context.material_settings);
+        let bind_group = Arc::clone(&context.bind_group);
+        let context = Arc::clone(&context.context);
+        let texture = Arc::clone(&texture);
+        let sampler = Arc::clone(&binding.sampler);
 
         let transcoded =
             decompress_and_transcode(&url, i as u32, &level_index, &header, &transcoder, format)
@@ -880,61 +928,65 @@ async fn load_ktx2_async(
             &texture_descriptor(),
         );
 
-        *sampler.borrow_mut() = Rc::new(
-            context
-                .device
-                .create_sampler(&sampler_descriptor(i, &context)),
-        );
+        let new_sampler = context
+            .device
+            .create_sampler(&sampler_descriptor(i, &context));
+
+        *sampler.lock() = Arc::new(new_sampler);
 
         let new_bind_group = create_model_bind_group(&context, &textures, &material_settings);
 
-        *bind_group.borrow_mut() = new_bind_group;
+        *bind_group.lock() = new_bind_group;
     }
 
     // Load all other mips in the background.
-    wasm_bindgen_futures::spawn_local({
-        let url = Rc::clone(url);
-        let textures = Rc::clone(&context.textures);
-        let material_settings = Rc::clone(&context.material_settings);
-        let bind_group = Rc::clone(&context.bind_group);
-        let context = Rc::clone(&context.context);
-        let texture = Rc::clone(&texture);
-        let sampler = Rc::clone(&binding.sampler);
+    {
+        let url = Arc::clone(url);
+        let textures = Arc::clone(&context.textures);
+        let material_settings = Arc::clone(&context.material_settings);
+        let bind_group = Arc::clone(&context.bind_group);
+        let model_context = Arc::clone(&context.context);
+        let texture = Arc::clone(&texture);
+        let sampler = Arc::clone(&binding.sampler);
 
-        async move {
-            for (i, level_index) in levels {
-                let transcoded = decompress_and_transcode(
-                    &url,
-                    i as u32,
-                    &level_index,
-                    &header,
-                    &transcoder,
-                    format,
-                )
-                .await
-                .unwrap();
+        model_context.clone().thread_pool.spawn_lazy(move || {
+            let model_context = Arc::clone(&model_context);
 
-                write_bytes_to_texture(
-                    &context.queue,
-                    &texture.texture,
-                    i as u32,
-                    &transcoded,
-                    &texture_descriptor(),
-                );
+            Box::pin(async move {
+                for (i, level_index) in levels {
+                    let transcoded = decompress_and_transcode(
+                        &url,
+                        i as u32,
+                        &level_index,
+                        &header,
+                        &transcoder,
+                        format,
+                    )
+                    .await
+                    .unwrap();
 
-                *sampler.borrow_mut() = Rc::new(
-                    context
-                        .device
-                        .create_sampler(&sampler_descriptor(i, &context)),
-                );
+                    write_bytes_to_texture(
+                        &model_context.queue,
+                        &texture.texture,
+                        i as u32,
+                        &transcoded,
+                        &texture_descriptor(),
+                    );
 
-                let new_bind_group =
-                    create_model_bind_group(&context, &textures, &material_settings);
+                    *sampler.lock() = Arc::new(
+                        model_context
+                            .device
+                            .create_sampler(&sampler_descriptor(i, &model_context)),
+                    );
 
-                *bind_group.borrow_mut() = new_bind_group;
-            }
-        }
-    });
+                    let new_bind_group =
+                        create_model_bind_group(&model_context, &textures, &material_settings);
+
+                    *bind_group.lock() = new_bind_group;
+                }
+            })
+        });
+    }
 
     Ok(texture)
 }
@@ -1003,13 +1055,13 @@ async fn read_num_bytes<R: futures::io::AsyncRead + std::marker::Unpin>(
     Ok(bytes)
 }
 
-fn load_ktx2(
-    device: &Rc<wgpu::Device>,
+async fn load_ktx2(
+    device: &Arc<ThreadSafeDevice>,
     queue: &wgpu::Queue,
     srgb: bool,
     supported_features: wgpu::Features,
     bytes: &[u8],
-) -> Texture {
+) -> anyhow::Result<Texture> {
     let ktx2 = ktx2::Reader::new(bytes).unwrap();
     let header = ktx2.header();
 
@@ -1077,11 +1129,11 @@ fn load_ktx2(
         write_bytes_to_texture(queue, &texture, i as u32, &transcoded, texture_descriptor);
     }
 
-    Texture::new(texture)
+    Ok(Texture::new(texture))
 }
 
 fn load_standard_image_format(
-    context: &ModelLoadContext,
+    context: &Arc<ModelLoadContext>,
     format_bytes: &[u8],
     srgb: bool,
 ) -> Texture {
@@ -1153,107 +1205,118 @@ fn load_standard_image_format(
             label: Some("command encoder"),
         });
 
-    let pipeline = context.pipeline_cache.get(
+    /*
+    let context_clone = context.clone();
+    let context_clone2 = context.clone();
+        
+    let pipeline = context_clone2.pipeline_cache.get(
         if srgb {
             "blit pipeline (srgb)"
         } else {
             "blit pipeline"
         },
-        || {
-            let bind_group_layout =
-                context
-                    .device
-                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                        label: None,
-                        entries: &[
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 0,
-                                visibility: wgpu::ShaderStages::FRAGMENT,
-                                count: None,
-                                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            },
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 1,
-                                visibility: wgpu::ShaderStages::FRAGMENT,
-                                count: None,
-                                ty: wgpu::BindingType::Texture {
-                                    sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: true,
-                                    },
-                                    view_dimension: wgpu::TextureViewDimension::D2,
-                                    multisampled: false,
-                                },
-                            },
-                        ],
-                    });
+        move || {
+            let shader_cache = context_clone.shader_cache.clone();
 
-            let pipeline_layout =
-                context
-                    .device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: None,
-                        bind_group_layouts: &[&bind_group_layout],
-                        push_constant_ranges: &[],
-                    });
-
-            let pipeline = context
+            context_clone
                 .device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: context.shader_cache.get("fullscreen_tri", || {
-                            context.device.create_shader_module(&wgpu::include_spirv!(
-                                "../fullscreen_tri.spv"
-                            ))
-                        }),
-                        entry_point: "fullscreen_tri",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: context.shader_cache.get("blit", || {
-                            context
-                                .device
-                                .create_shader_module(&wgpu::include_spirv!("../blit.spv"))
-                        }),
-                        entry_point: "blit",
-                        targets: &[format.into()],
-                    }),
-                    primitive: Default::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    multiview: Default::default(),
-                });
+                .call(|device| {
+                    let bind_group_layout =
+                        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                            label: None,
+                            entries: &[
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 0,
+                                    visibility: wgpu::ShaderStages::FRAGMENT,
+                                    count: None,
+                                    ty: wgpu::BindingType::Sampler(
+                                        wgpu::SamplerBindingType::Filtering,
+                                    ),
+                                },
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 1,
+                                    visibility: wgpu::ShaderStages::FRAGMENT,
+                                    count: None,
+                                    ty: wgpu::BindingType::Texture {
+                                        sample_type: wgpu::TextureSampleType::Float {
+                                            filterable: true,
+                                        },
+                                        view_dimension: wgpu::TextureViewDimension::D2,
+                                        multisampled: false,
+                                    },
+                                },
+                            ],
+                        });
 
-            PipelineData {
-                pipeline,
-                bind_group_layout,
-                pipeline_layout,
-            }
+                    let pipeline_layout =
+                        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: None,
+                            bind_group_layouts: &[&bind_group_layout],
+                            push_constant_ranges: &[],
+                        });
+
+                    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: None,
+                        layout: Some(&pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: shader_cache.get("fullscreen_tri", || {
+                                device.create_shader_module(&wgpu::include_spirv!(
+                                    "../fullscreen_tri.spv"
+                                ))
+                            }),
+                            entry_point: "fullscreen_tri",
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: shader_cache.get("blit", || {
+                                device.create_shader_module(&wgpu::include_spirv!("../blit.spv"))
+                            }),
+                            entry_point: "blit",
+                            targets: &[format.into()],
+                        }),
+                        primitive: Default::default(),
+                        depth_stencil: None,
+                        multisample: Default::default(),
+                        multiview: Default::default(),
+                    });
+
+                    PipelineData {
+                        pipeline,
+                        bind_group_layout,
+                        pipeline_layout,
+                    }
+                })
+                .unwrap()
         },
     );
 
     for source_level in 0..mip_level_count - 1 {
-        let bind_group = context
+        let context = context.clone();
+        let context2 = context.clone();
+
+        let bind_group = context2
             .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &pipeline.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Sampler(&context.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(if source_level == 0 {
-                            &source_view
-                        } else {
-                            &temp_blit_textures[source_level as usize - 1].view
-                        }),
-                    },
-                ],
-            });
+            .call(move |device| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Sampler(&context.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(if source_level == 0 {
+                                &source_view
+                            } else {
+                                &temp_blit_textures[source_level as usize - 1].view
+                            }),
+                        },
+                    ],
+                })
+            })
+            .unwrap();
 
         let temp_blit_texture = &temp_blit_textures[source_level as usize];
 
@@ -1301,7 +1364,9 @@ fn load_standard_image_format(
 
     context.queue.submit(std::iter::once(encoder.finish()));
 
-    texture
+    texture*/
+
+    panic!()
 }
 
 pub(crate) fn load_single_pixel_image(
@@ -1309,8 +1374,8 @@ pub(crate) fn load_single_pixel_image(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     bytes: &[u8; 4],
-) -> Rc<Texture> {
-    Rc::new(Texture::new(device.create_texture_with_data(
+) -> Arc<Texture> {
+    Arc::new(Texture::new(device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
             label: None,
@@ -1370,14 +1435,19 @@ pub(crate) async fn async_reader_from_fetch(
         request_init.headers(&headers);
     }
 
-    let response: web_sys::Response = wasm_bindgen_futures::JsFuture::from(
-        web_sys::window()
-            .unwrap()
-            .fetch_with_str_and_init(url.as_str(), &request_init),
-    )
-    .await
-    .map_err(|err| anyhow::anyhow!("{:?}", err))?
-    .into();
+    use wasm_bindgen::prelude::wasm_bindgen;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = ["self"], js_name = fetch)]
+        fn fetch(url: &str, request_init: &web_sys::RequestInit) -> js_sys::Promise;
+    }
+
+    let response: web_sys::Response =
+        wasm_bindgen_futures::JsFuture::from(fetch(url.as_str(), &request_init))
+            .await
+            .map_err(|err| anyhow::anyhow!("{:?}", err))?
+            .into();
 
     if !response.ok() {
         return Err(anyhow::anyhow!(
@@ -1414,7 +1484,7 @@ async fn fetch_bytes(url: &url::Url) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-pub(crate) type FetchedImages = std::collections::HashMap<Rc<url::Url>, (Rc<Texture>, bool)>;
+pub(crate) type FetchedImages = std::collections::HashMap<Arc<url::Url>, (Arc<Texture>, bool)>;
 
 pub(crate) fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
     let mut removed = 0;
@@ -1424,7 +1494,7 @@ pub(crate) fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
         // it should be 2: the model + the one in this map. If less than 2
         // (it's normally impossible for strong_count to return 1 but w/e)
         // then we can drop it.
-        if Rc::strong_count(texture_ref) < 2 {
+        if Arc::strong_count(texture_ref) < 2 {
             removed += 1;
             false
         } else {
@@ -1477,9 +1547,9 @@ fn write_bytes_to_texture(
 // Like the following, except without trying to write subsequent mips.
 // https://github.com/gfx-rs/wgpu/blob/0b61a191244da0f0d987d53614a6698097a7622f/wgpu/src/util/device.rs#L79-L146
 fn create_texture_with_first_mip_data(
-    device: &wgpu::Device,
+    device: &ThreadSafeDevice,
     queue: &wgpu::Queue,
-    desc: &wgpu::TextureDescriptor,
+    desc: &wgpu::TextureDescriptor<'static>,
     data: &[u8],
 ) -> wgpu::Texture {
     // Implicitly add the COPY_DST usage

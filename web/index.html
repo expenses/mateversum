@@ -154,8 +154,9 @@
             handle_xr_data = func;
         };
 
-        import init from "./pkg/webxr-pbr.js";
-        init();
+        import init, { run } from "./pkg/webxr_pbr.js";
+        await init();
+        await run();
       </script>
     </body>
 </html>
