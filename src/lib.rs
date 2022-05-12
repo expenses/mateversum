@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::wasm_bindgen;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::JsCast;
 use wasm_webxr_helpers::{button_click_future, create_button};
 use wgpu::util::DeviceExt;
 
@@ -13,8 +13,8 @@ mod assets;
 mod caching;
 
 use assets::{
-    async_reader_from_fetch, load_gltf_from_bytes, load_single_pixel_image, prune_fetched_images,
-    FetchedImages, ModelLoadContext, ModelPrimitive,
+    load_gltf_from_bytes, load_single_pixel_image, prune_fetched_images, FetchedImages,
+    ModelLoadContext, ModelPrimitive,
 };
 use caching::ResourceCache;
 
@@ -47,11 +47,7 @@ pub fn main() {
 
     // Put the basis universal wasm blob into the global scope.
     wasm_bindgen_futures::spawn_local(async move {
-        let module = basis_universal_wasm::Module::new().await;
-
-        let global = js_sys::global();
-
-        js_sys::Reflect::set(&global, &"basis".into(), &module).unwrap();
+        basis_universal_wasm::wasm_init().await;
 
         // We need to initialize it here because otherwise the basis_universal crate
         // will only let you do so once across all threads.
@@ -107,19 +103,15 @@ pub async fn run() {
     let canvas = wasm_webxr_helpers::Canvas::default();
     let webgl2_context = canvas.create_webgl2_context();
 
+    let caches = web_sys::window().unwrap().caches().unwrap();
+
+    let cache: web_sys::Cache = wasm_bindgen_futures::JsFuture::from(caches.open("0.1.0"))
+        .await
+        .unwrap()
+        .into();
+
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
-
-    let mut preloaded_model_data = Vec::new();
-
-    for model_url in &model_urls {
-        let url = url::Url::options()
-            .base_url(Some(&href))
-            .parse(model_url)
-            .unwrap();
-
-        preloaded_model_data.push((handle_error(async_reader_from_fetch(&url, None).await), url));
-    }
 
     let mode = futures::select! {
         _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
@@ -440,6 +432,7 @@ pub async fn run() {
         sampler: Rc::clone(&linear_sampler),
         performance_settings,
         thread_pool,
+        request_client: crate::assets::RequestClient::new(cache),
     });
 
     let mut instances = Vec::new();
@@ -455,15 +448,21 @@ pub async fn run() {
 
     log::info!("urls: {:?}", model_urls);
 
-    for (i, (mut async_reader, url)) in preloaded_model_data.into_iter().enumerate() {
+    for (i, model_url) in model_urls.into_iter().enumerate() {
+        let url = url::Url::options()
+            .base_url(Some(&href))
+            .parse(&model_url)
+            .unwrap();
+
         {
             let models = Rc::clone(&models);
             let context = Rc::clone(&context);
             wasm_bindgen_futures::spawn_local(async move {
-                use futures::AsyncReadExt;
-
-                let mut bytes = Vec::new();
-                async_reader.read_to_end(&mut bytes).await.unwrap();
+                let bytes = context
+                    .request_client
+                    .fetch_bytes(&url, None)
+                    .await
+                    .unwrap();
                 let model = load_gltf_from_bytes(&bytes, Some(url), context).await;
                 models.borrow_mut()[i] = model.unwrap();
             });
@@ -1100,18 +1099,6 @@ fn render_primitives<'a>(
 
             render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
             render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
-        }
-    }
-}
-
-fn handle_error<T>(result: anyhow::Result<T>) -> T {
-    match result {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = web_sys::window()
-                .unwrap()
-                .alert_with_message(&error.to_string());
-            panic!()
         }
     }
 }

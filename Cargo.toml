@@ -28,15 +28,13 @@ url = "2.2.2"
 ktx2 = { git = "https://github.com/expenses/ktx2", branch = "expose-more" }
 crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
 wasm-bindgen = { version = "0.2.80", features = ["enable-interning"] }
-wasm-streams = "0.2.2"
 wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
 basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-wasm" }
 elsa = "1.7.0"
 anyhow = "1.0.57"
 basis-universal = { git = "https://github.com/expenses/basis-universal-rs" }
 zstd = { version = "0.11.1", default-features = false, features = ["wasm"] }
-async-compression = { version = "0.3.12", features = ["futures-io", "zstd"] }
-wasm-futures-executor = { path = "../wasm-futures-executor" }
+wasm-futures-executor = { git = "https://github.com/expenses/wasm-futures-executor", branch = "unbounded" }
 
 [dependencies.web-sys]
 version = "0.3.36"
@@ -92,6 +90,9 @@ features = [
   'XrInputSourceArray',
   'RtcDataChannel',
   'MessageEvent',
+  'CacheStorage',
+  'Cache',
+  'ResponseInit'
 ]
 
 [patch.crates-io]
@@ -102,7 +103,6 @@ js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fix
 glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-framebuffer" }
 wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
-async-compression = { git = "https://github.com/indygreg/async-compression", branch = "zstd-upgrade" }
 
 [patch."https://github.com/expenses/basis-universal-rs-wasm"]
 basis-universal-wasm = { path = "../basis-universal-rs-wasm" }

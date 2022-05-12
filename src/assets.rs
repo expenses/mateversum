@@ -1,10 +1,11 @@
 use crate::PerformanceSettings;
 use crevice::std140::AsStd140;
-use futures::AsyncReadExt;
 use glam::{Vec2, Vec3};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::io::Read;
 use std::num::NonZeroU32;
+use std::ops::Range;
 use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
@@ -25,6 +26,7 @@ pub(crate) struct ModelLoadContext {
     pub(crate) sampler: Rc<wgpu::Sampler>,
     pub(crate) performance_settings: PerformanceSettings,
     pub(crate) thread_pool: wasm_futures_executor::ThreadPool,
+    pub(crate) request_client: RequestClient,
 }
 
 struct ModelBuffers {
@@ -354,7 +356,10 @@ pub(crate) async fn load_gltf_from_bytes(
                         .map
                         .insert(buffer.index(), base64::decode(data).unwrap());
                 } else {
-                    buffers.map.insert(buffer.index(), fetch_bytes(&url).await?);
+                    buffers.map.insert(
+                        buffer.index(),
+                        context.request_client.fetch_bytes(&url, None).await?,
+                    );
                 }
             }
         }
@@ -572,9 +577,9 @@ enum ImageSource<'a> {
 }
 
 impl<'a> ImageSource<'a> {
-    async fn get_bytes(&self) -> anyhow::Result<Cow<'a, [u8]>> {
+    async fn get_bytes(&self, client: &RequestClient) -> anyhow::Result<Cow<'a, [u8]>> {
         Ok(match self {
-            Self::Url(url) => Cow::Owned(fetch_bytes(url).await?),
+            Self::Url(url) => Cow::Owned(client.fetch_bytes(url, None).await?),
             Self::Bytes(bytes) => Cow::Borrowed(bytes),
         })
     }
@@ -605,7 +610,7 @@ async fn load_image_from_mime_type(
             &context.context.device,
             &context.context.queue,
             context.context.supported_features,
-            &source.get_bytes().await?,
+            &source.get_bytes(&context.context.request_client).await?,
             srgb,
         ))
     } else {
@@ -613,7 +618,7 @@ async fn load_image_from_mime_type(
 
         Rc::new(load_standard_image_format(
             &context.context,
-            &source.get_bytes().await?,
+            &source.get_bytes(&context.context.request_client).await?,
             srgb,
         ))
     })
@@ -804,14 +809,15 @@ async fn load_ktx2_async(
         (texture_size_log as u32).saturating_sub(max_size_log as u32)
     }
 
-    let mut header_bytes = [0; ktx2::Header::LENGTH];
-
-    async_reader_from_fetch(url, Some(0..ktx2::Header::LENGTH))
-        .await?
-        .read_exact(&mut header_bytes)
+    let header_bytes = context
+        .context
+        .request_client
+        .fetch_bytes(url, Some(0..ktx2::Header::LENGTH))
         .await?;
 
-    let header = ktx2::Header::from_bytes(&header_bytes);
+    let header = ktx2::Header::from_bytes(&<[u8; ktx2::Header::LENGTH]>::try_from(
+        &header_bytes[..ktx2::Header::LENGTH],
+    )?);
 
     header.validate()?;
 
@@ -824,25 +830,30 @@ async fn load_ktx2_async(
     let mut level_indices = Vec::with_capacity(header.level_count as usize);
 
     {
-        let mut async_reader = async_reader_from_fetch(
-            url,
-            Some(
-                ktx2::Header::LENGTH
-                    ..ktx2::Header::LENGTH + ktx2::LevelIndex::LENGTH * header.level_count as usize,
-            ),
-        )
-        .await?;
+        let mut reader = std::io::Cursor::new(
+            context
+                .context
+                .request_client
+                .fetch_bytes(
+                    url,
+                    Some(
+                        ktx2::Header::LENGTH
+                            ..ktx2::Header::LENGTH
+                                + ktx2::LevelIndex::LENGTH * header.level_count as usize,
+                    ),
+                )
+                .await?,
+        );
 
         for _ in 0..header.level_count {
             let mut level_index_bytes = [0; ktx2::LevelIndex::LENGTH];
 
-            async_reader.read_exact(&mut level_index_bytes).await?;
+            reader.read_exact(&mut level_index_bytes)?;
 
             level_indices.push(ktx2::LevelIndex::from_bytes(&level_index_bytes));
         }
     }
 
-    let transcoder = basis_universal::LowLevelUastcTranscoder::new();
     let format = Format::new_from_features(context.context.supported_features);
 
     let texture_descriptor = move || wgpu::TextureDescriptor {
@@ -896,6 +907,7 @@ async fn load_ktx2_async(
             header,
             &context.thread_pool,
             format,
+            &context.request_client,
         )
         .await
         .unwrap();
@@ -942,6 +954,7 @@ async fn load_ktx2_async(
                     header,
                     &context.thread_pool,
                     format,
+                    &context.request_client,
                 )
                 .await
                 .unwrap();
@@ -978,27 +991,31 @@ async fn decompress_and_transcode(
     header: ktx2::Header,
     thread_pool: &wasm_futures_executor::ThreadPool,
     format: Format,
+    client: &RequestClient,
 ) -> anyhow::Result<Vec<u8>> {
     let transcoder = basis_universal::LowLevelUastcTranscoder::new();
 
-    let mut async_read = async_reader_from_fetch(
-        url,
-        Some(level_index.offset as usize..(level_index.offset + level_index.length_bytes) as usize),
-    )
-    .await?;
-
-    let bytes = read_num_bytes(&mut async_read, level_index.length_bytes as usize).await?;
+    let bytes = client
+        .fetch_bytes(
+            url,
+            Some(
+                level_index.offset as usize
+                    ..(level_index.offset + level_index.length_bytes) as usize,
+            ),
+        )
+        .await?;
 
     thread_pool
         .spawn(async move {
             let decompressed = match header.supercompression_scheme {
                 Some(ktx2::SupercompressionScheme::Zstandard) => {
-                    let uncompressed_length_bytes = level_index.uncompressed_length_bytes;
-
-                    let mut decoder = async_compression::futures::bufread::ZstdDecoder::new(
-                        futures::io::Cursor::new(&bytes),
-                    );
-                    read_num_bytes(&mut decoder, uncompressed_length_bytes as usize).await?
+                    // Annoyingly, the cache seems to return a response body with more bytes (in most cases 1 I think?)
+                    // than it should have. So we just make sure we're only trying to decompress `level_bytes` bytes.
+                    // todo: it could be that the Range: header is inclusive at the end or being interpreted as such.
+                    zstd::bulk::decompress(
+                        &bytes[..level_index.length_bytes as usize],
+                        level_index.uncompressed_length_bytes as usize,
+                    )?
                 }
                 Some(other) => panic!("Unsupported: {:?}", other),
                 None => bytes,
@@ -1028,17 +1045,6 @@ async fn decompress_and_transcode(
                 .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
         })
         .await?
-}
-
-async fn read_num_bytes<R: futures::io::AsyncRead + std::marker::Unpin>(
-    reader: &mut R,
-    num_bytes: usize,
-) -> anyhow::Result<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(num_bytes);
-
-    reader.read_to_end(&mut bytes).await?;
-
-    Ok(bytes)
 }
 
 fn load_ktx2(
@@ -1367,91 +1373,6 @@ pub(crate) fn load_single_pixel_image(
     )))
 }
 
-fn response_body_async_reader(
-    response: web_sys::Response,
-) -> anyhow::Result<impl futures::io::AsyncRead> {
-    use futures::{StreamExt, TryStreamExt};
-
-    let js_stream = wasm_streams::ReadableStream::from_raw(
-        wasm_bindgen::JsValue::from(
-            response
-                .body()
-                .ok_or_else(|| anyhow::anyhow!("Failed to get response body"))?,
-        )
-        .into(),
-    );
-
-    Ok(js_stream
-        .into_stream()
-        .map(|value| {
-            let array: js_sys::Uint8Array = value.unwrap().into();
-            let vec = array.to_vec();
-            Ok(vec)
-        })
-        .into_async_read())
-}
-
-pub(crate) async fn async_reader_from_fetch(
-    url: &url::Url,
-    byte_range: Option<std::ops::Range<usize>>,
-) -> anyhow::Result<impl futures::io::AsyncRead> {
-    let mut request_init = web_sys::RequestInit::new();
-
-    if let Some(byte_range) = byte_range {
-        let headers = js_sys::Object::new();
-        js_sys::Reflect::set(
-            &headers,
-            &"Range".into(),
-            &format!("bytes={}-{}", byte_range.start, byte_range.end).into(),
-        )
-        .map_err(|err| anyhow::anyhow!("Js Error: {:?}", err))?;
-        request_init.headers(&headers);
-    }
-
-    let response: web_sys::Response = wasm_bindgen_futures::JsFuture::from(
-        web_sys::window()
-            .unwrap()
-            .fetch_with_str_and_init(url.as_str(), &request_init),
-    )
-    .await
-    .map_err(|err| anyhow::anyhow!("{:?}", err))?
-    .into();
-
-    if !response.ok() {
-        return Err(anyhow::anyhow!(
-            "Bad fetch response:\nGot status code {} for {}",
-            response.status(),
-            url
-        ));
-    }
-
-    let length = response
-        .headers()
-        .get("content-length")
-        .map_err(|err| anyhow::anyhow!("{:?}", err))?
-        .unwrap();
-
-    let length: u64 = length.parse().unwrap();
-
-    log::info!(
-        "Fetching {}. Size in MB: {}",
-        url,
-        length as f32 / 1024.0 / 1024.0
-    );
-
-    response_body_async_reader(response)
-}
-
-async fn fetch_bytes(url: &url::Url) -> anyhow::Result<Vec<u8>> {
-    let mut async_reader = async_reader_from_fetch(url, None).await?;
-
-    let mut buf = Vec::new();
-
-    async_reader.read_to_end(&mut buf).await?;
-
-    Ok(buf)
-}
-
 pub(crate) type FetchedImages = std::collections::HashMap<Rc<url::Url>, (Rc<Texture>, bool)>;
 
 pub(crate) fn prune_fetched_images(fetched_images: &mut FetchedImages) -> u32 {
@@ -1575,5 +1496,155 @@ impl Texture {
             view: texture.create_view(&Default::default()),
             texture,
         }
+    }
+}
+
+async fn resolve_promise(promise: js_sys::Promise) -> anyhow::Result<wasm_bindgen::JsValue> {
+    wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .map_err(|err| anyhow::anyhow!("{:?}", err))
+}
+
+fn construct_request_init(
+    byte_range: Option<Range<usize>>,
+) -> anyhow::Result<web_sys::RequestInit> {
+    let mut request_init = web_sys::RequestInit::new();
+
+    if let Some(byte_range) = byte_range {
+        let headers = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &headers,
+            &"Range".into(),
+            &format!("bytes={}-{}", byte_range.start, byte_range.end).into(),
+        )
+        .map_err(|err| anyhow::anyhow!("Js Error: {:?}", err))?;
+        request_init.headers(&headers);
+    }
+
+    Ok(request_init)
+}
+
+pub(crate) struct RequestClient {
+    cache: web_sys::Cache,
+}
+
+impl RequestClient {
+    pub fn new(cache: web_sys::Cache) -> Self {
+        Self { cache }
+    }
+
+    async fn fetch_uint8_array(
+        &self,
+        url: &url::Url,
+        byte_range: Option<Range<usize>>,
+    ) -> anyhow::Result<js_sys::Uint8Array> {
+        let request_init = construct_request_init(byte_range.clone())?;
+
+        let mut cache_url = url.clone();
+
+        if let Some(byte_range) = byte_range.as_ref() {
+            cache_url
+                .query_pairs_mut()
+                .append_pair("bytes", &format!("{}-{}", byte_range.start, byte_range.end));
+        }
+
+        let cache_request =
+            web_sys::Request::new_with_str_and_init(cache_url.as_str(), &request_init)
+                .map_err(|err| anyhow::anyhow!("{:?}", err))?;
+
+        let response = match self.lookup(&cache_request).await? {
+            Some(response) => response,
+            None => {
+                let request = web_sys::Request::new_with_str_and_init(url.as_str(), &request_init)
+                    .map_err(|err| anyhow::anyhow!("{:?}", err))?;
+
+                let response: web_sys::Response =
+                    resolve_promise(web_sys::window().unwrap().fetch_with_request(&request))
+                        .await?
+                        .into();
+
+                if !response.ok() {
+                    return Err(anyhow::anyhow!(
+                        "Bad fetch response:\nGot status code {} for {}",
+                        response.status(),
+                        url
+                    ));
+                }
+
+                let response = if byte_range.is_some() {
+                    let array_buffer: js_sys::ArrayBuffer = resolve_promise(
+                        response
+                            .array_buffer()
+                            .map_err(|err| anyhow::anyhow!("{:?}", err))?,
+                    )
+                    .await?
+                    .into();
+
+                    let mut response_init = web_sys::ResponseInit::new();
+
+                    response_init.headers(&response.headers());
+
+                    let fabricated_response =
+                        web_sys::Response::new_with_opt_buffer_source_and_init(
+                            Some(&array_buffer.into()),
+                            &response_init,
+                        );
+
+                    fabricated_response.map_err(|err| anyhow::anyhow!("{:?}", err))?
+                } else {
+                    response
+                };
+
+                self.store(&cache_request, &response).await?;
+
+                self.lookup(&cache_request).await?.unwrap()
+            }
+        };
+
+        let array_buffer: js_sys::ArrayBuffer = resolve_promise(
+            response
+                .array_buffer()
+                .map_err(|err| anyhow::anyhow!("{:?}", err))?,
+        )
+        .await?
+        .into();
+
+        let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+
+        Ok(uint8_array)
+    }
+
+    pub async fn fetch_bytes(
+        &self,
+        url: &url::Url,
+        byte_range: Option<Range<usize>>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let uint8_array = self.fetch_uint8_array(url, byte_range).await?;
+
+        Ok(uint8_array.to_vec())
+    }
+
+    async fn store(
+        &self,
+        request: &web_sys::Request,
+        response: &web_sys::Response,
+    ) -> anyhow::Result<()> {
+        resolve_promise(self.cache.put_with_request(request, response)).await?;
+
+        Ok(())
+    }
+
+    async fn lookup(
+        &self,
+        request: &web_sys::Request,
+    ) -> anyhow::Result<Option<web_sys::Response>> {
+        let cache_lookup = resolve_promise(self.cache.match_with_request(request)).await?;
+
+        Ok(if !cache_lookup.is_undefined() {
+            Some(cache_lookup.into())
+        } else {
+            log::info!("Missed");
+            None
+        })
     }
 }
