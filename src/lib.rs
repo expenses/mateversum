@@ -13,11 +13,12 @@ mod assets;
 mod caching;
 
 use assets::{
-    load_gltf_from_bytes, load_single_pixel_image, prune_fetched_images, FetchedImages,
-    ModelLoadContext, ModelPrimitive,
+    load_gltf_from_bytes, load_single_pixel_image, FetchedImages, Format, ModelLoadContext,
+    ModelPrimitive,
 };
 use caching::ResourceCache;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 enum AnisotrophicFilteringLevel {
     L2 = 2,
@@ -28,7 +29,7 @@ enum AnisotrophicFilteringLevel {
 
 struct PerformanceSettings {
     anisotrophic_filtering_level: Option<AnisotrophicFilteringLevel>,
-    max_texture_size: u32,
+    max_texture_size: Option<u32>,
 }
 
 impl PerformanceSettings {
@@ -82,11 +83,9 @@ pub async fn run() {
 
     let vr_button = create_button("Start VR");
     let ar_button = create_button("Start AR");
-    let inline_button = create_button("Start inline rendering");
 
     let start_vr_future = button_click_future(&vr_button);
     let start_ar_future = button_click_future(&ar_button);
-    let start_inline_future = button_click_future(&inline_button);
 
     let canvas = wasm_webxr_helpers::Canvas::default();
     let webgl2_context = canvas.create_webgl2_context();
@@ -104,7 +103,6 @@ pub async fn run() {
     let mode = futures::select! {
         _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
         _ = Box::pin(start_ar_future.fuse()) => web_sys::XrSessionMode::ImmersiveAr,
-        _ = Box::pin(start_inline_future.fuse()) => web_sys::XrSessionMode::Inline,
     };
 
     let reference_space_type = match mode {
@@ -160,14 +158,13 @@ pub async fn run() {
         adapter.get_downlevel_capabilities()
     );
 
-    let supported_features = adapter.features();
-    log::info!("Supported features: {:?}", supported_features);
+    log::info!("Supported features: {:?}", adapter.features());
 
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("device"),
-                features: supported_features,
+                features: adapter.features(),
                 limits: adapter.limits(),
             },
             None,
@@ -180,10 +177,27 @@ pub async fn run() {
 
     let fetched_images = FetchedImages::default();
 
-    let performance_settings = PerformanceSettings {
+    // Todo: this should be set by the user
+    let mut performance_settings = PerformanceSettings {
         anisotrophic_filtering_level: Some(AnisotrophicFilteringLevel::L16),
-        max_texture_size: 1024,
+        max_texture_size: Some(1024),
     };
+
+    // Bring max texture size more down to earth.
+    let device_max_texture_size = adapter.limits().max_texture_dimension_2d;
+    performance_settings.max_texture_size = Some(
+        performance_settings
+            .max_texture_size
+            .map(|size| size.min(device_max_texture_size))
+            .unwrap_or(device_max_texture_size),
+    );
+
+    let compressed_texture_format = Format::new_from_features(adapter.features());
+
+    log::info!(
+        "Using compressed texture format: {:?}",
+        compressed_texture_format
+    );
 
     let linear_sampler = Rc::new(device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,
@@ -414,7 +428,7 @@ pub async fn run() {
             wgpu::TextureFormat::Rgba8UnormSrgb,
             &[255, 255, 255, 255],
         ),
-        supported_features,
+        compressed_texture_format,
         shader_cache: Rc::clone(&shader_cache),
         pipeline_cache: Default::default(),
         sampler: Rc::clone(&linear_sampler),
