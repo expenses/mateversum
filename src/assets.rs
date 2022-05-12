@@ -329,7 +329,7 @@ pub(crate) struct Model {
 pub(crate) async fn load_gltf_from_bytes(
     bytes: &[u8],
     base_url: Option<url::Url>,
-    context: Rc<ModelLoadContext>,
+    context: &Rc<ModelLoadContext>,
 ) -> anyhow::Result<Model> {
     let gltf = gltf::Gltf::from_slice(bytes).unwrap();
 
@@ -467,7 +467,7 @@ pub(crate) async fn load_gltf_from_bytes(
                 .map(|primitive| (primitive, false)),
         )
     {
-        let primitive = primitive.upload(&gltf, &context, &buffers, &base_url);
+        let primitive = primitive.upload(&gltf, context, &buffers, &base_url);
 
         if is_opaque {
             opaque_primitives_vec.push(primitive);
@@ -1643,7 +1643,6 @@ impl RequestClient {
         Ok(if !cache_lookup.is_undefined() {
             Some(cache_lookup.into())
         } else {
-            log::info!("Missed");
             None
         })
     }

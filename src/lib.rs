@@ -72,24 +72,12 @@ pub async fn run() {
         Cow::Borrowed(
             "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_CypressTree_glTF.gltf",
         ),
-        Cow::Borrowed("controller_model/controller.gltf"),
-        Cow::Borrowed("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf"),
     ];
 
-    let mut no_sponza = false;
-
     for (key, value) in href.query_pairs() {
-        log::warn!("{} {}", key, &value);
-
         if key == "model" {
             model_urls.push(value);
-        } else if key == "nosponza" {
-            no_sponza = true;
         }
-    }
-
-    if no_sponza {
-        model_urls.remove(0);
     }
 
     let vr_button = create_button("Start VR");
@@ -435,46 +423,75 @@ pub async fn run() {
         request_client: crate::assets::RequestClient::new(cache),
     });
 
-    let mut instances = Vec::new();
-    let mut instance_counts = Vec::new();
-
-    let mut models = Vec::new();
-
-    for _ in 0..model_urls.len() {
-        models.push(assets::Model::default());
-    }
-
-    let models = std::rc::Rc::new(std::cell::RefCell::new(models));
+    let models = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
     log::info!("urls: {:?}", model_urls);
 
-    for (i, model_url) in model_urls.into_iter().enumerate() {
+    for model_url in &model_urls {
         let url = url::Url::options()
             .base_url(Some(&href))
-            .parse(&model_url)
+            .parse(model_url)
             .unwrap();
 
         {
             let models = Rc::clone(&models);
             let context = Rc::clone(&context);
+            let device = Rc::clone(&device);
             wasm_bindgen_futures::spawn_local(async move {
                 let bytes = context
                     .request_client
                     .fetch_bytes(&url, None)
                     .await
                     .unwrap();
-                let model = load_gltf_from_bytes(&bytes, Some(url), context).await;
-                models.borrow_mut()[i] = model.unwrap();
+                let model = load_gltf_from_bytes(&bytes, Some(url), &context)
+                    .await
+                    .unwrap();
+                models.borrow_mut().push(InstancedModel {
+                    model,
+                    num_instances: 1,
+                    instance_buffer: ResizingBuffer::new(
+                        &device,
+                        bytemuck::bytes_of(&Instance::default()),
+                        wgpu::BufferUsages::VERTEX,
+                    ),
+                });
             });
         }
-
-        if i == 3 || i == 4 {
-            instance_counts.push(0);
-        } else {
-            instance_counts.push(1);
-            instances.push(Instance::default());
-        }
     }
+
+    let hand_model = {
+        let url = url::Url::options()
+            .base_url(Some(&href))
+            .parse("controller_model/controller.gltf")
+            .unwrap();
+
+        let bytes = context
+            .request_client
+            .fetch_bytes(&url, None)
+            .await
+            .unwrap();
+
+        load_gltf_from_bytes(&bytes, Some(url), &context)
+            .await
+            .unwrap()
+    };
+
+    let head_model = {
+        let url = url::Url::options()
+            .base_url(Some(&href))
+            .parse("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf")
+            .unwrap();
+
+        let bytes = context
+            .request_client
+            .fetch_bytes(&url, None)
+            .await
+            .unwrap();
+
+        load_gltf_from_bytes(&bytes, Some(url), &context)
+            .await
+            .unwrap()
+    };
 
     let setup_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())
@@ -520,12 +537,6 @@ pub async fn run() {
         .unwrap();
     // We need do this this as otherwise `on_message` is dropped when `run()` finishes.
     on_message.forget();
-
-    let mut instance_buffer = ResizingBuffer::new(
-        &device,
-        bytemuck::cast_slice(&instances),
-        wgpu::BufferUsages::VERTEX,
-    );
 
     let mut player_heads_buffer =
         ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3, wgpu::BufferUsages::VERTEX);
@@ -719,8 +730,6 @@ pub async fn run() {
                 );
             }
 
-            instance_buffer.write(&device, &queue, bytemuck::cast_slice(&instances));
-
             queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
@@ -799,10 +808,13 @@ pub async fn run() {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // We borrow all the bind groups here because they need to be borrowed for the entire duration of the render pass.
+
         let opaque_model_primitives: Vec<Vec<_>> = models
             .iter()
             .map(|model| {
                 model
+                    .model
                     .opaque_primitives
                     .iter()
                     .map(|primitive| primitive.bind_group.borrow())
@@ -814,12 +826,25 @@ pub async fn run() {
             .iter()
             .map(|model| {
                 model
+                    .model
                     .alpha_clipped_primitives
                     .iter()
                     .map(|primitive| primitive.bind_group.borrow())
                     .collect::<Vec<_>>()
             })
             .collect();
+
+        let head_primitives = head_model
+            .opaque_primitives
+            .iter()
+            .map(|primitive| primitive.bind_group.borrow())
+            .collect::<Vec<_>>();
+
+        let hand_primitives = hand_model
+            .opaque_primitives
+            .iter()
+            .map(|primitive| primitive.bind_group.borrow())
+            .collect::<Vec<_>>();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("command encoder"),
@@ -859,29 +884,25 @@ pub async fn run() {
         {
             render_pass.set_pipeline(&pbr_pipeline);
 
-            render_pass.set_vertex_buffer(3, instance_buffer.inner.slice(..));
-
-            let mut instance_offset = 0;
-
             for (model_index, model) in models.iter().enumerate() {
+                render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
+
                 render_primitives(
                     &mut render_pass,
-                    &model.opaque_primitives,
+                    &model.model.opaque_primitives,
                     &opaque_model_primitives[model_index],
                     &viewports,
                     &uniform_bind_groups,
-                    instance_offset..instance_offset + instance_counts[model_index],
+                    0..model.num_instances,
                 );
-                instance_offset += instance_counts[model_index];
             }
 
             {
                 render_pass.set_vertex_buffer(3, player_heads_buffer.inner.slice(..));
-                let model_index = 2;
                 render_primitives(
                     &mut render_pass,
-                    &models[model_index].opaque_primitives,
-                    &opaque_model_primitives[model_index],
+                    &head_model.opaque_primitives,
+                    &head_primitives,
                     &viewports,
                     &uniform_bind_groups,
                     0..player_heads.len() as u32,
@@ -890,11 +911,10 @@ pub async fn run() {
 
             {
                 render_pass.set_vertex_buffer(3, player_hands_buffer.inner.slice(..));
-                let model_index = 1;
                 render_primitives(
                     &mut render_pass,
-                    &models[model_index].opaque_primitives,
-                    &opaque_model_primitives[model_index],
+                    &hand_model.opaque_primitives,
+                    &hand_primitives,
                     &viewports,
                     &uniform_bind_groups,
                     0..player_hands.len() as u32,
@@ -903,20 +923,17 @@ pub async fn run() {
 
             render_pass.set_pipeline(&pbr_alpha_clipped_pipeline);
 
-            render_pass.set_vertex_buffer(3, instance_buffer.inner.slice(..));
-
-            let mut instance_offset = 0;
-
             for (model_index, model) in models.iter().enumerate() {
+                render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
+
                 render_primitives(
                     &mut render_pass,
-                    &model.alpha_clipped_primitives,
+                    &model.model.alpha_clipped_primitives,
                     &alpha_clipped_model_primitives[model_index],
                     &viewports,
                     &uniform_bind_groups,
-                    instance_offset..instance_offset + instance_counts[model_index],
+                    0..model.num_instances,
                 );
-                instance_offset += instance_counts[model_index];
             }
 
             {
@@ -1101,4 +1118,10 @@ fn render_primitives<'a>(
             render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
         }
     }
+}
+
+struct InstancedModel {
+    model: assets::Model,
+    num_instances: u32,
+    instance_buffer: ResizingBuffer,
 }
