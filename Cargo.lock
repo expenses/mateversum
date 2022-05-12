@@ -113,6 +113,7 @@ dependencies = [
 [[package]]
 name = "basis-universal-wasm"
 version = "0.1.0"
+source = "git+https://github.com/expenses/basis-universal-rs-wasm#4af203625239a6c733574ae2971eeb3d25b77872"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

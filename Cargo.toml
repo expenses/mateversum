@@ -104,9 +104,6 @@ glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-fr
 wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
 
-[patch."https://github.com/expenses/basis-universal-rs-wasm"]
-basis-universal-wasm = { path = "../basis-universal-rs-wasm" }
-
 [workspace]
 members = [
   ".",
