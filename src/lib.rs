@@ -654,11 +654,13 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             let input_source = input_sources.get(i).unwrap();
 
             if let Some(grip_space) = input_source.grip_space() {
-                let grip_pose = frame.get_pose(&grip_space, &reference_space).unwrap();
-                let transform = grip_pose.transform();
-                let instance = Instance::from_transform(transform, 1.0);
-                player_state.hands[i as usize] = instance;
-                line_verts[i as usize * 2].position = instance.position;
+                // todo: not sure why this would be None? But has been in 1 case.
+                if let Some(grip_pose) = frame.get_pose(&grip_space, &reference_space) {
+                    let transform = grip_pose.transform();
+                    let instance = Instance::from_transform(transform, 1.0);
+                    player_state.hands[i as usize] = instance;
+                    line_verts[i as usize * 2].position = instance.position;
+                }
             }
         }
 
