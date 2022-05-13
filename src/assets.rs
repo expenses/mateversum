@@ -789,7 +789,7 @@ async fn load_ktx2_async(
         min_filter: wgpu::FilterMode::Linear,
         mipmap_filter: wgpu::FilterMode::Linear,
         anisotropy_clamp: context.performance_settings.anisotropy_clamp(),
-        lod_min_clamp: level as f32,
+        lod_min_clamp: (level - down_scaling_level) as f32,
         ..Default::default()
     };
 
@@ -834,7 +834,7 @@ async fn load_ktx2_async(
         *sampler.borrow_mut() = Rc::new(
             context
                 .device
-                .create_sampler(&sampler_descriptor(i, &context)),
+                .create_sampler(&sampler_descriptor(i as u32, &context)),
         );
 
         let new_bind_group = create_model_bind_group(&context, &textures, &material_settings);
@@ -881,7 +881,7 @@ async fn load_ktx2_async(
                 *sampler.borrow_mut() = Rc::new(
                     context
                         .device
-                        .create_sampler(&sampler_descriptor(i, &context)),
+                        .create_sampler(&sampler_descriptor(i as u32, &context)),
                 );
 
                 let new_bind_group =
