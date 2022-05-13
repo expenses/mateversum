@@ -717,15 +717,16 @@ async fn load_ktx2_async(
         (texture_size_log as u32).saturating_sub(max_size_log as u32)
     }
 
-    let header_bytes = context
+    let mut header_bytes = [0; ktx2::Header::LENGTH];
+
+    context
         .context
         .request_client
-        .fetch_bytes(url, Some(0..ktx2::Header::LENGTH))
-        .await?;
+        .fetch_uint8_array(url, Some(0..ktx2::Header::LENGTH))
+        .await?
+        .copy_to(&mut header_bytes);
 
-    let header = ktx2::Header::from_bytes(&<[u8; ktx2::Header::LENGTH]>::try_from(
-        &header_bytes[..ktx2::Header::LENGTH],
-    )?);
+    let header = ktx2::Header::from_bytes(&header_bytes);
 
     header.validate()?;
 
@@ -919,13 +920,7 @@ async fn decompress_and_transcode(
         .spawn(async move {
             let decompressed = match header.supercompression_scheme {
                 Some(ktx2::SupercompressionScheme::Zstandard) => {
-                    // Annoyingly, the cache seems to return a response body with more bytes (in most cases 1 I think?)
-                    // than it should have. So we just make sure we're only trying to decompress `level_bytes` bytes.
-                    // todo: it could be that the Range: header is inclusive at the end or being interpreted as such.
-                    zstd::bulk::decompress(
-                        &bytes[..level_index.length_bytes as usize],
-                        level_index.uncompressed_length_bytes as usize,
-                    )?
+                    zstd::bulk::decompress(&bytes, level_index.uncompressed_length_bytes as usize)?
                 }
                 Some(other) => panic!("Unsupported: {:?}", other),
                 None => bytes,
@@ -1063,6 +1058,10 @@ async fn resolve_promise(promise: js_sys::Promise) -> anyhow::Result<wasm_bindge
         .map_err(|err| anyhow::anyhow!("{:?}", err))
 }
 
+fn byte_range_string(range: Range<usize>) -> String {
+    format!("bytes={}-{}", range.start, range.end - 1)
+}
+
 fn construct_request_init(
     byte_range: Option<Range<usize>>,
 ) -> anyhow::Result<web_sys::RequestInit> {
@@ -1073,7 +1072,7 @@ fn construct_request_init(
         js_sys::Reflect::set(
             &headers,
             &"Range".into(),
-            &format!("bytes={}-{}", byte_range.start, byte_range.end).into(),
+            &byte_range_string(byte_range).into(),
         )
         .map_err(|err| anyhow::anyhow!("Js Error: {:?}", err))?;
         request_init.headers(&headers);
@@ -1104,10 +1103,11 @@ impl RequestClient {
 
         let mut cache_url = url.clone();
 
-        if let Some(byte_range) = byte_range.as_ref() {
-            cache_url
-                .query_pairs_mut()
-                .append_pair("bytes", &format!("{}-{}", byte_range.start, byte_range.end));
+        if let Some(byte_range) = byte_range.clone() {
+            cache_url.query_pairs_mut().append_pair(
+                "bytes",
+                &format!("{}-{}", byte_range.start, byte_range.end - 1),
+            );
         }
 
         let mut fetch_url = url.clone();
@@ -1115,11 +1115,38 @@ impl RequestClient {
         if url.scheme() == "ipfs" {
             fetch_url = self.ipfs_gateway_url.clone();
 
-            fetch_url.path_segments_mut().unwrap().extend(
-                std::iter::once(url.host_str().unwrap()).chain(url.path_segments().unwrap()),
-            );
+            let host_err = || anyhow::anyhow!("Failed to get url host");
+            let path_segments_err = || anyhow::anyhow!("Failed to get url path segments");
+            let scheme_err = || anyhow::anyhow!("Failed to set scheme");
 
-            cache_url.set_scheme_unchecked("http").unwrap();
+            fetch_url
+                .path_segments_mut()
+                .map_err(|_| path_segments_err())?
+                .extend(
+                    std::iter::once(url.host_str().ok_or_else(host_err)?)
+                        .chain(url.path_segments().ok_or_else(path_segments_err)?),
+                );
+
+            // The Web Cache API only lets you cache http:// or https:// urls.
+            // As a result, we need to rewrite the url to:
+            // http://ipfs/<CID>/<PATH>
+
+            cache_url
+                .set_scheme_unchecked("http")
+                .map_err(|_| scheme_err())?;
+
+            // Append the host_str (the CID in this case) to the path.
+            let new_path: Vec<_> = std::iter::once(cache_url.host_str().ok_or_else(host_err)?)
+                .chain(cache_url.path_segments().ok_or_else(path_segments_err)?)
+                .map(|string| string.to_owned())
+                .collect();
+            cache_url
+                .path_segments_mut()
+                .map_err(|_| path_segments_err())?
+                .clear()
+                .extend(new_path);
+
+            cache_url.set_host(Some("ipfs"))?;
         }
 
         let cache_request =
