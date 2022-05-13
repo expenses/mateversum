@@ -434,7 +434,7 @@ pub async fn run() {
         sampler: Rc::clone(&linear_sampler),
         performance_settings,
         thread_pool,
-        request_client: crate::assets::RequestClient::new(cache),
+        request_client: crate::assets::RequestClient::new(cache).unwrap(),
     });
 
     let models = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));

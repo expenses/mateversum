@@ -1084,11 +1084,15 @@ fn construct_request_init(
 
 pub(crate) struct RequestClient {
     cache: web_sys::Cache,
+    ipfs_gateway_url: url::Url,
 }
 
 impl RequestClient {
-    pub fn new(cache: web_sys::Cache) -> Self {
-        Self { cache }
+    pub fn new(cache: web_sys::Cache) -> anyhow::Result<Self> {
+        Ok(Self {
+            cache,
+            ipfs_gateway_url: url::Url::parse("http://localhost:8080/ipfs")?,
+        })
     }
 
     async fn fetch_uint8_array(
@@ -1106,6 +1110,18 @@ impl RequestClient {
                 .append_pair("bytes", &format!("{}-{}", byte_range.start, byte_range.end));
         }
 
+        let mut fetch_url = url.clone();
+
+        if url.scheme() == "ipfs" {
+            fetch_url = self.ipfs_gateway_url.clone();
+
+            fetch_url.path_segments_mut().unwrap().extend(
+                std::iter::once(url.host_str().unwrap()).chain(url.path_segments().unwrap()),
+            );
+
+            cache_url.set_scheme_unchecked("http").unwrap();
+        }
+
         let cache_request =
             web_sys::Request::new_with_str_and_init(cache_url.as_str(), &request_init)
                 .map_err(|err| anyhow::anyhow!("{:?}", err))?;
@@ -1113,8 +1129,9 @@ impl RequestClient {
         let response = match self.lookup(&cache_request).await? {
             Some(response) => response,
             None => {
-                let request = web_sys::Request::new_with_str_and_init(url.as_str(), &request_init)
-                    .map_err(|err| anyhow::anyhow!("{:?}", err))?;
+                let request =
+                    web_sys::Request::new_with_str_and_init(fetch_url.as_str(), &request_init)
+                        .map_err(|err| anyhow::anyhow!("{:?}", err))?;
 
                 let response: web_sys::Response =
                     resolve_promise(web_sys::window().unwrap().fetch_with_request(&request))

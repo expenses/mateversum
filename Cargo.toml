@@ -24,7 +24,7 @@ glow = "0.11.2"
 wgpu-hal = "0.12.0"
 base64 = "0.13.0"
 js-sys = "0.3.57"
-url = "2.2.2"
+url = { git = "https://github.com/expenses/rust-url", branch = "set-scheme-unchecked" }
 ktx2 = { git = "https://github.com/expenses/ktx2", branch = "expose-more" }
 crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
 wasm-bindgen = { version = "0.2.80", features = ["enable-interning"] }
