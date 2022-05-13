@@ -722,7 +722,7 @@ async fn load_ktx2_async(
     context
         .context
         .request_client
-        .fetch_uint8_array(url, Some(0..ktx2::Header::LENGTH))
+        .fetch_uint8_array(url, Some(0..ktx2::Header::LENGTH), true)
         .await?
         .copy_to(&mut header_bytes);
 
@@ -1098,6 +1098,7 @@ impl RequestClient {
         &self,
         url: &url::Url,
         byte_range: Option<Range<usize>>,
+        cache: bool,
     ) -> anyhow::Result<js_sys::Uint8Array> {
         let request_init = construct_request_init(byte_range.clone())?;
 
@@ -1197,9 +1198,13 @@ impl RequestClient {
                     response
                 };
 
-                self.store(&cache_request, &response).await?;
+                if cache {
+                    self.store(&cache_request, &response).await?;
 
-                self.lookup(&cache_request).await?.unwrap()
+                    self.lookup(&cache_request).await?.unwrap()
+                } else {
+                    response
+                }
             }
         };
 
@@ -1221,7 +1226,17 @@ impl RequestClient {
         url: &url::Url,
         byte_range: Option<Range<usize>>,
     ) -> anyhow::Result<Vec<u8>> {
-        let uint8_array = self.fetch_uint8_array(url, byte_range).await?;
+        let uint8_array = self.fetch_uint8_array(url, byte_range, true).await?;
+
+        Ok(uint8_array.to_vec())
+    }
+
+    pub async fn fetch_bytes_without_caching(
+        &self,
+        url: &url::Url,
+        byte_range: Option<Range<usize>>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let uint8_array = self.fetch_uint8_array(url, byte_range, false).await?;
 
         Ok(uint8_array.to_vec())
     }

@@ -1,8 +1,8 @@
 use crevice::std140::AsStd140;
 use futures::FutureExt;
 use glam::{Mat4, Vec3};
-use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsCast;
@@ -57,27 +57,43 @@ pub fn main() {
 }
 
 #[wasm_bindgen]
-pub async fn run() {
-    let thread_pool = wasm_futures_executor::ThreadPool::max_threads()
-        .await
-        .unwrap();
+pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
+    let thread_pool = wasm_futures_executor::ThreadPool::max_threads().await?;
 
-    let href = web_sys::window().unwrap().location().href().unwrap();
-    let href = url::Url::parse(&href).unwrap();
+    let href = web_sys::window().unwrap().location().href()?;
+    let href = url::Url::parse(&href).map_err(|err| err.to_string())?;
 
-    let mut model_urls = vec![
-        Cow::Borrowed(
-            "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_Main_Blender_glTF.gltf",
-        ),
-        Cow::Borrowed("https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_Curtains_glTF.gltf"),
-        Cow::Borrowed(
-            "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_CypressTree_glTF.gltf",
-        ),
-    ];
+    let caches = web_sys::window().unwrap().caches()?;
+
+    let cache: web_sys::Cache = wasm_bindgen_futures::JsFuture::from(caches.open("0.1.0"))
+        .await?
+        .into();
+
+    let request_client = crate::assets::RequestClient::new(cache).map_err(|err| err.to_string())?;
+
+    let mut model_refs: Vec<ModelReference> = serde_json::from_slice(
+        &request_client
+            .fetch_bytes_without_caching(
+                &url::Url::options()
+                    .base_url(Some(&href))
+                    .parse("new_sponza.json")
+                    .unwrap(),
+                None,
+            )
+            .await
+            .map_err(|err| err.to_string())?,
+    )
+    .map_err(|err| format!("Failed to parse model ref json: {}", err))?;
 
     for (key, value) in href.query_pairs() {
         if key == "model" {
-            model_urls.push(value);
+            model_refs.push(ModelReference {
+                url: url::Url::options()
+                    .base_url(Some(&href))
+                    .parse(&value)
+                    .unwrap(),
+                position: [0.0; 3],
+            });
         }
     }
 
@@ -89,13 +105,6 @@ pub async fn run() {
 
     let canvas = wasm_webxr_helpers::Canvas::default();
     let webgl2_context = canvas.create_webgl2_context();
-
-    let caches = web_sys::window().unwrap().caches().unwrap();
-
-    let cache: web_sys::Cache = wasm_bindgen_futures::JsFuture::from(caches.open("0.1.0"))
-        .await
-        .unwrap()
-        .into();
 
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
@@ -117,13 +126,11 @@ pub async fn run() {
             mode,
             web_sys::XrSessionInit::new().required_features(&required_features),
         ))
-        .await
-        .unwrap()
+        .await?
         .into();
 
     let xr_gl_layer =
-        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)
-            .unwrap();
+        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)?;
 
     let mut render_state_init = web_sys::XrRenderStateInit::new();
     render_state_init
@@ -134,8 +141,7 @@ pub async fn run() {
     let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(
         xr_session.request_reference_space(reference_space_type),
     )
-    .await
-    .unwrap()
+    .await?
     .into();
 
     let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
@@ -434,95 +440,91 @@ pub async fn run() {
         sampler: Rc::clone(&linear_sampler),
         performance_settings,
         thread_pool,
-        request_client: crate::assets::RequestClient::new(cache).unwrap(),
+        request_client,
     });
 
-    let models = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let models = Rc::new(RefCell::new(Vec::new()));
 
-    log::info!("urls: {:?}", model_urls);
+    // Deduplicate model references with the same url so they get treated as instances of the same model.
 
-    for (i, model_url) in model_urls.iter().enumerate() {
-        let url = url::Url::options()
-            .base_url(Some(&href))
-            .parse(model_url)
-            .unwrap();
+    let mut model_instances: HashMap<url::Url, Vec<Instance>> = HashMap::new();
 
-        {
-            let models = Rc::clone(&models);
-            let context = Rc::clone(&context);
-            let device = Rc::clone(&device);
-            wasm_bindgen_futures::spawn_local(async move {
-                let bytes = context
-                    .request_client
-                    .fetch_bytes(&url, None)
-                    .await
-                    .unwrap();
-                let model = load_gltf_from_bytes(&bytes, Some(url), &context)
-                    .await
-                    .unwrap();
+    for model_ref in model_refs {
+        model_instances
+            .entry(model_ref.url)
+            .or_default()
+            .push(Instance::new(
+                model_ref.position.into(),
+                1.0,
+                glam::Quat::IDENTITY,
+            ));
+    }
 
-                let instance = if i == 2 {
-                    Instance::new(Vec3::new(-2.0, 0.0, 0.0), 1.0, glam::Quat::IDENTITY)
-                } else {
-                    Instance::default()
-                };
+    for (model_url, instances) in model_instances {
+        let models = Rc::clone(&models);
+        let context = Rc::clone(&context);
+        let device = Rc::clone(&device);
+        wasm_bindgen_futures::spawn_local(async move {
+            let bytes = context
+                .request_client
+                .fetch_bytes(&model_url, None)
+                .await
+                .unwrap();
+            let model = load_gltf_from_bytes(&bytes, Some(model_url.clone()), &context)
+                .await
+                .unwrap();
 
-                models.borrow_mut().push(InstancedModel {
-                    model,
-                    num_instances: 1,
-                    instance_buffer: ResizingBuffer::new(
-                        &device,
-                        bytemuck::bytes_of(&instance),
-                        wgpu::BufferUsages::VERTEX,
-                    ),
-                });
+            models.borrow_mut().push(InstancedModel {
+                model,
+                instance_buffer: ResizingBuffer::new(
+                    &device,
+                    bytemuck::cast_slice(&instances),
+                    wgpu::BufferUsages::VERTEX,
+                ),
+                instances,
             });
-        }
+        });
     }
 
     let hand_model = {
         let url = url::Url::options()
             .base_url(Some(&href))
             .parse("controller_model/controller.gltf")
-            .unwrap();
+            .map_err(|err| err.to_string())?;
 
         let bytes = context
             .request_client
             .fetch_bytes(&url, None)
             .await
-            .unwrap();
+            .map_err(|err| err.to_string())?;
 
         load_gltf_from_bytes(&bytes, Some(url), &context)
             .await
-            .unwrap()
+            .map_err(|err| err.to_string())?
     };
 
     let head_model = {
         let url = url::Url::options()
             .base_url(Some(&href))
             .parse("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf")
-            .unwrap();
+            .map_err(|err| err.to_string())?;
 
         let bytes = context
             .request_client
             .fetch_bytes(&url, None)
             .await
-            .unwrap();
+            .map_err(|err| err.to_string())?;
 
         load_gltf_from_bytes(&bytes, Some(url), &context)
             .await
-            .unwrap()
+            .map_err(|err| err.to_string())?
     };
 
     let setup_fn: js_sys::Function =
-        js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())
-            .unwrap()
-            .into();
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())?.into();
 
     let send_fn: js_sys::Function =
-        js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())
-            .unwrap()
-            .into();
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())?.into();
 
     let player_states = Rc::new(RefCell::new(std::collections::HashMap::new()));
     let on_message = {
@@ -550,12 +552,10 @@ pub async fn run() {
             as Box<dyn FnMut(js_sys::Uint8Array, String)>)
     };
 
-    setup_fn
-        .call1(
-            &wasm_bindgen::JsValue::undefined(),
-            on_message.as_ref().unchecked_ref(),
-        )
-        .unwrap();
+    setup_fn.call1(
+        &wasm_bindgen::JsValue::undefined(),
+        on_message.as_ref().unchecked_ref(),
+    )?;
     // We need do this this as otherwise `on_message` is dropped when `run()` finishes.
     on_message.forget();
 
@@ -914,7 +914,7 @@ pub async fn run() {
                     &opaque_model_primitives[model_index],
                     &viewports,
                     &uniform_bind_groups,
-                    0..model.num_instances,
+                    0..model.instances.len() as u32,
                 );
             }
 
@@ -953,7 +953,7 @@ pub async fn run() {
                     &alpha_clipped_model_primitives[model_index],
                     &viewports,
                     &uniform_bind_groups,
-                    0..model.num_instances,
+                    0..model.instances.len() as u32,
                 );
             }
 
@@ -981,6 +981,8 @@ pub async fn run() {
 
         queue.submit(std::iter::once(encoder.finish()));
     });
+
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1143,6 +1145,12 @@ fn render_primitives<'a>(
 
 struct InstancedModel {
     model: assets::Model,
-    num_instances: u32,
+    instances: Vec<Instance>,
     instance_buffer: ResizingBuffer,
+}
+
+#[derive(serde::Deserialize)]
+struct ModelReference {
+    url: url::Url,
+    position: [f32; 3],
 }
