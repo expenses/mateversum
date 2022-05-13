@@ -1,0 +1,10 @@
+[
+    {
+        "url": "ipfs://QmQqYLvBEvJphFNRRnrt1aapR6CoEsxEN1D4Z2wQWaTJXA/glTF/Sponza.gltf",
+        "position": [0, 0, 0]
+    },
+    {
+        "url": "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_CypressTree_glTF.gltf",
+        "position": [-2, 0, 0]
+    }
+]
