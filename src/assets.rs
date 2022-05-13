@@ -767,11 +767,18 @@ async fn load_ktx2_async(
 
     let format = context.context.compressed_texture_format;
 
+    let downscaled_width = header.pixel_width >> down_scaling_level;
+    let downscaled_height = header.pixel_height >> down_scaling_level;
+
     let texture_descriptor = move || wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
-            width: header.pixel_width >> down_scaling_level,
-            height: header.pixel_height >> down_scaling_level,
+            // Compressed textures made made of 4x4 blocks, so there are some issues
+            // with textures that don't have a side length divisible by 4.
+            // They're considered fine everywhere except D3D11 and old versions of D3D12
+            // (according to jasperrlz in the Wgpu Users element chat).
+            width: downscaled_width - (downscaled_width % 4),
+            height: downscaled_height - (downscaled_height % 4),
             depth_or_array_layers: 1,
         },
         mip_level_count: header.level_count - down_scaling_level,
