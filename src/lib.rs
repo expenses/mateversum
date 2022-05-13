@@ -441,7 +441,7 @@ pub async fn run() {
 
     log::info!("urls: {:?}", model_urls);
 
-    for model_url in &model_urls {
+    for (i, model_url) in model_urls.iter().enumerate() {
         let url = url::Url::options()
             .base_url(Some(&href))
             .parse(model_url)
@@ -460,12 +460,19 @@ pub async fn run() {
                 let model = load_gltf_from_bytes(&bytes, Some(url), &context)
                     .await
                     .unwrap();
+
+                let instance = if i == 2 {
+                    Instance::new(Vec3::new(-2.0, 0.0, 0.0), 1.0, glam::Quat::IDENTITY)
+                } else {
+                    Instance::default()
+                };
+
                 models.borrow_mut().push(InstancedModel {
                     model,
                     num_instances: 1,
                     instance_buffer: ResizingBuffer::new(
                         &device,
-                        bytemuck::bytes_of(&Instance::default()),
+                        bytemuck::bytes_of(&instance),
                         wgpu::BufferUsages::VERTEX,
                     ),
                 });
