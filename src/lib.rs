@@ -93,6 +93,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     .parse(&value)
                     .unwrap(),
                 position: [0.0; 3],
+                rotation: [0.0; 3],
+                scale: 1.0,
             });
         }
     }
@@ -455,8 +457,13 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .or_default()
             .push(Instance::new(
                 model_ref.position.into(),
-                1.0,
-                glam::Quat::IDENTITY,
+                model_ref.scale,
+                glam::Quat::from_euler(
+                    glam::EulerRot::XYZ,
+                    model_ref.rotation[0].to_radians(),
+                    model_ref.rotation[1].to_radians(),
+                    model_ref.rotation[2].to_radians(),
+                ),
             ));
     }
 
@@ -1154,5 +1161,14 @@ struct InstancedModel {
 #[derive(serde::Deserialize)]
 struct ModelReference {
     url: url::Url,
+    #[serde(default)]
     position: [f32; 3],
+    #[serde(default)]
+    rotation: [f32; 3],
+    #[serde(default = "one")]
+    scale: f32,
+}
+
+const fn one() -> f32 {
+    1.0
 }
