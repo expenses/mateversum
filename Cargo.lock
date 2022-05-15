@@ -1015,6 +1015,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "mateversum"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.13.0",
+ "basis-universal",
+ "basis-universal-wasm",
+ "bytemuck",
+ "console_error_panic_hook",
+ "console_log",
+ "crevice",
+ "elsa",
+ "futures",
+ "glam",
+ "glow",
+ "gltf",
+ "gltf-helpers",
+ "image 0.24.1",
+ "js-sys",
+ "ktx2",
+ "log",
+ "serde",
+ "serde_json",
+ "shared-structs",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-futures-executor",
+ "wasm-web-helpers",
+ "wasm-webxr-helpers",
+ "web-sys",
+ "wgpu",
+ "wgpu-hal",
+ "zstd",
+]
+
+[[package]]
 name = "memchr"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2156,43 +2193,6 @@ source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#ca661c
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webxr-pbr"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.13.0",
- "basis-universal",
- "basis-universal-wasm",
- "bytemuck",
- "console_error_panic_hook",
- "console_log",
- "crevice",
- "elsa",
- "futures",
- "glam",
- "glow",
- "gltf",
- "gltf-helpers",
- "image 0.24.1",
- "js-sys",
- "ktx2",
- "log",
- "serde",
- "serde_json",
- "shared-structs",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-futures-executor",
- "wasm-web-helpers",
- "wasm-webxr-helpers",
- "web-sys",
- "wgpu",
- "wgpu-hal",
- "zstd",
 ]
 
 [[package]]
