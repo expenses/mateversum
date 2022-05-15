@@ -1121,12 +1121,13 @@ impl RequestClient {
         let mut fetch_url = url.clone();
 
         if url.scheme() == "ipfs" {
-            fetch_url = self.ipfs_gateway_url.clone();
+            //fetch_url = self.ipfs_gateway_url.clone();
 
             let host_err = || anyhow::anyhow!("Failed to get url host");
             let path_segments_err = || anyhow::anyhow!("Failed to get url path segments");
             let scheme_err = || anyhow::anyhow!("Failed to set scheme");
 
+            /*
             fetch_url
                 .path_segments_mut()
                 .map_err(|_| path_segments_err())?
@@ -1134,6 +1135,7 @@ impl RequestClient {
                     std::iter::once(url.host_str().ok_or_else(host_err)?)
                         .chain(url.path_segments().ok_or_else(path_segments_err)?),
                 );
+                */
 
             // The Web Cache API only lets you cache http:// or https:// urls.
             // As a result, we need to rewrite the url to:

@@ -1,0 +1,21 @@
+{
+  "name": "networking",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild index.js --bundle --format=esm --inject:globals.js --outfile=../web/networking.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "^0.14.39"
+  },
+  "dependencies": {
+    "ipfs-core": "^0.14.3",
+    "js-ipfs-fetch": "file:js-ipfs-fetch",
+    "process": "^0.11.10",
+    "trystero": "github:expenses/trystero#key-signing",
+    "util": "^0.12.4"
+  }
+}

@@ -6,8 +6,36 @@
     </head>
     <body>
       <script src="coi-serviceworker.js"></script>
-      <script src = "trystero_bundled.js"></script>
       <script type="module">
+        import { trystero, IPFS, makeIpfsFetch } from './networking.js';
+
+        console.log(makeIpfsFetch);
+
+        const ipfs = await IPFS.create();
+
+        const all=async s=>{const t=[];for await(const o of s)t.push(o);return t};
+
+        const x = await all(ipfs.cat('ipfs://QmQqYLvBEvJphFNRRnrt1aapR6CoEsxEN1D4Z2wQWaTJXA/glTF/Sponza.gltf'));
+        console.log(x);
+
+        const ipfs_fetch = await makeIpfsFetch({ipfs});
+
+        const http_fetch = window.fetch;
+
+        window.fetch = (req) => {
+            let request = new Request(req);
+            let url = new URL(request.url);
+
+            if (url.protocol == "http:" || url.protocol == "https:") {
+                return http_fetch(request);
+            } else {
+                console.log(request);
+                return ipfs_fetch(request);
+            }
+        };
+
+        console.log(ipfs, ipfs_fetch);
+
         window.onerror = function (msg, url, linenumber) {
             alert(`Error message: ${msg}\nURL: ${url}\nLine Number: ${linenumber}`);
             return true;

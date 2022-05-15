@@ -1,0 +1,1 @@
+IPFS requires this `util` module that's in nodejs but not available in the browser so we import the `util` package from npm. (See https://github.com/DougAnderson444/ipfs-vite-svelte-kit/blob/b60c940db51537acab316450d8a6e6dffebe2e9c/README.md#steps-to-reproduce.)
