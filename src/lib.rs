@@ -304,7 +304,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let vertex_state = wgpu::VertexState {
         module: shader_cache.get("vertex", || {
-            device.create_shader_module(&wgpu::include_spirv!("../vertex.spv"))
+            device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/vertex.spv"))
         }),
         entry_point: "vertex",
         buffers: vertex_buffers,
@@ -316,7 +316,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         vertex: vertex_state.clone(),
         fragment: Some(wgpu::FragmentState {
             module: shader_cache.get("fragment", || {
-                device.create_shader_module(&wgpu::include_spirv!("../fragment.spv"))
+                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/fragment.spv"))
             }),
             entry_point: "fragment",
             targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
@@ -344,7 +344,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             fragment: Some(wgpu::FragmentState {
                 module: shader_cache.get("fragment_alpha_clipped", || {
                     device.create_shader_module(&wgpu::include_spirv!(
-                        "../fragment_alpha_clipped.spv"
+                        "../compiled-shaders/fragment_alpha_clipped.spv"
                     ))
                 }),
                 entry_point: "fragment_alpha_clipped",
@@ -376,7 +376,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         layout: Some(&line_pipeline_layout),
         vertex: wgpu::VertexState {
             module: shader_cache.get("line_vertex", || {
-                device.create_shader_module(&wgpu::include_spirv!("../line_vertex.spv"))
+                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/line_vertex.spv"))
             }),
             entry_point: "line_vertex",
             buffers: &[wgpu::VertexBufferLayout {
@@ -387,7 +387,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         },
         fragment: Some(wgpu::FragmentState {
             module: shader_cache.get("flat_colour", || {
-                device.create_shader_module(&wgpu::include_spirv!("../flat_colour.spv"))
+                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/flat_colour.spv"))
             }),
             entry_point: "flat_colour",
             targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],

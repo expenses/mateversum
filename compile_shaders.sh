@@ -1,7 +1,7 @@
 cd rust-gpu-cli-builder
-cargo run --release -- ../shaders --multimodule
+cargo run --release -- ../shaders --multimodule --output ../compiled-shaders
 cd ..
-for file in *.spv; do
+for file in compiled-shaders/*.spv; do
     path=$(realpath $file)
     cd ../../spirv-extra-opt-passes/spirv-extra-opt
     cargo run --quiet -- $path --experimental-remove-bad-op-switches -o $path;

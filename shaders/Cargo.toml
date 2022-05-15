@@ -8,5 +8,5 @@ crate-type = ["dylib", "lib"]
 
 [dependencies]
 spirv-std = { git = "https://github.com/EmbarkStudios/rust-gpu", features = ["glam"] }
-glam-pbr = { path = "../../../transmission-renderer/glam-pbr" }
+glam-pbr = { git = "https://github.com/expenses/glam-pbr" }
 shared-structs = { path = "../shared-structs" }
