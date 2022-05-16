@@ -18,9 +18,13 @@ Mateversum is really not fit for any kind of public use right now. That said, yo
 
 On a Unix/WSL machine run `sh run.sh` to compile Mateversum and start a local server. You'll need Rust, [`wasm-bindgen`](https://github.com/rustwasm/wasm-bindgen) and the [Caddy](https://caddyserver.com/) HTTP server (or equivalent) for this.
 
-## Compiling the shaders
+### Compiling the shaders
 
 Because we're especially cool, we use [rust-gpu](https://github.com/EmbarkStudios/rust-gpu) for the GPU shaders. Run `sh compile_shaders.sh` to compile these, but the script needs some special stuff to be installed for that I can't be bothered documenting it yet.
+
+### Compiling the javascript for networking
+
+The javascript code that we use for networking can be built by `cd`ing into `networking-js`, running `npm install` followed by `npm run build`.
 
 ## A Few Implementation Details
 

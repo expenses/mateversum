@@ -6,8 +6,9 @@
     </head>
     <body>
       <script src="coi-serviceworker.js"></script>
-      <script src = "trystero_bundled.js"></script>
       <script type="module">
+        import { trystero } from './networking.js';
+
         window.onerror = function (msg, url, linenumber) {
             alert(`Error message: ${msg}\nURL: ${url}\nLine Number: ${linenumber}`);
             return true;

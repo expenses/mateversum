@@ -1,0 +1,17 @@
+{
+  "name": "networking",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild index.js --bundle --format=esm --outfile=../web/networking.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "^0.14.39"
+  },
+  "dependencies": {
+    "trystero": "github:expenses/trystero#key-signing"
+  }
+}
