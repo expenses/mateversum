@@ -7,3 +7,6 @@
 [submodule "networking-js/js-ipfs-fetch"]
 	path = networking-js/js-ipfs-fetch
 	url = https://github.com/expenses/js-ipfs-fetch
+[submodule "networking-js/make-fetch"]
+	path = networking-js/make-fetch
+	url = https://github.com/expenses/make-fetch

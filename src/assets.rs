@@ -1183,7 +1183,7 @@ impl RequestClient {
                     ));
                 }
 
-                let response = if byte_range.is_some() {
+                let response = if byte_range.is_some() || url.scheme() == "ipfs" {
                     let array_buffer: js_sys::ArrayBuffer = resolve_promise(
                         response
                             .array_buffer()

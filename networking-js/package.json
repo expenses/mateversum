@@ -12,6 +12,7 @@
     "esbuild": "^0.14.39"
   },
   "dependencies": {
+    "buffer": "^6.0.3",
     "ipfs-core": "^0.14.3",
     "js-ipfs-fetch": "file:js-ipfs-fetch",
     "process": "^0.11.10",
