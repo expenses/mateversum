@@ -176,7 +176,7 @@ pub(super) fn load_standard_image_format(
                     vertex: wgpu::VertexState {
                         module: context.shader_cache.get("fullscreen_tri", || {
                             context.device.create_shader_module(&wgpu::include_spirv!(
-                                "../../fullscreen_tri.spv"
+                                "../../compiled-shaders/fullscreen_tri.spv"
                             ))
                         }),
                         entry_point: "fullscreen_tri",
@@ -186,7 +186,7 @@ pub(super) fn load_standard_image_format(
                         module: context.shader_cache.get("blit", || {
                             context
                                 .device
-                                .create_shader_module(&wgpu::include_spirv!("../../blit.spv"))
+                                .create_shader_module(&wgpu::include_spirv!("../../compiled-shaders/blit.spv"))
                         }),
                         entry_point: "blit",
                         targets: &[format.into()],
