@@ -131,8 +131,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         .await?
         .into();
 
+    let mut layer_init = web_sys::XrWebGlLayerInit::new();
+
+    layer_init.alpha(false).depth(true).stencil(true);
+
     let xr_gl_layer =
-        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context(&xr_session, &webgl2_context)?;
+        web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(&xr_session, &webgl2_context, &layer_init)?;
 
     let mut render_state_init = web_sys::XrRenderStateInit::new();
     render_state_init
@@ -271,141 +275,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }),
     );
 
-    let model_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("model pipeline layout"),
-        bind_group_layouts: &[&uniform_bgl, &model_bgl],
-        push_constant_ranges: &[],
-    });
-
-    let vertex_buffers = &[
-        wgpu::VertexBufferLayout {
-            array_stride: 3 * 4,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-        },
-        wgpu::VertexBufferLayout {
-            array_stride: 3 * 4,
-            attributes: &wgpu::vertex_attr_array![1 => Float32x3],
-            step_mode: wgpu::VertexStepMode::Vertex,
-        },
-        wgpu::VertexBufferLayout {
-            array_stride: 2 * 4,
-            attributes: &wgpu::vertex_attr_array![2 => Float32x2],
-            step_mode: wgpu::VertexStepMode::Vertex,
-        },
-        wgpu::VertexBufferLayout {
-            array_stride: 8 * 4,
-            attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4],
-            step_mode: wgpu::VertexStepMode::Instance,
-        },
-    ];
-
     let shader_cache = Rc::new(ResourceCache::default());
 
-    let vertex_state = wgpu::VertexState {
-        module: shader_cache.get("vertex", || {
-            device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/vertex.spv"))
-        }),
-        entry_point: "vertex",
-        buffers: vertex_buffers,
-    };
-
-    let pbr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("pbr pipeline"),
-        layout: Some(&model_pipeline_layout),
-        vertex: vertex_state.clone(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader_cache.get("fragment", || {
-                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/fragment.spv"))
-            }),
-            entry_point: "fragment",
-            targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-        }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Front),
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            bias: wgpu::DepthBiasState::default(),
-            stencil: Default::default(),
-        }),
-        multisample: Default::default(),
-        multiview: Default::default(),
-    });
-
-    let pbr_alpha_clipped_pipeline =
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("pbr alpha clipped pipeline"),
-            layout: Some(&model_pipeline_layout),
-            vertex: vertex_state,
-            fragment: Some(wgpu::FragmentState {
-                module: shader_cache.get("fragment_alpha_clipped", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/fragment_alpha_clipped.spv"
-                    ))
-                }),
-                entry_point: "fragment_alpha_clipped",
-                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-            }),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Front),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                bias: wgpu::DepthBiasState::default(),
-                stencil: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview: Default::default(),
-        });
-
-    let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("line pipeline layout"),
-        bind_group_layouts: &[&uniform_bgl],
-        push_constant_ranges: &[],
-    });
-
-    let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("line pipeline"),
-        layout: Some(&line_pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: shader_cache.get("line_vertex", || {
-                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/line_vertex.spv"))
-            }),
-            entry_point: "line_vertex",
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: 6 * 4,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-            }],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader_cache.get("flat_colour", || {
-                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/flat_colour.spv"))
-            }),
-            entry_point: "flat_colour",
-            targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::LineList,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            bias: wgpu::DepthBiasState::default(),
-            stencil: Default::default(),
-        }),
-        multisample: Default::default(),
-        multiview: Default::default(),
-    });
+    let pipelines = Pipelines::new(&device, &shader_cache, &uniform_bgl, &model_bgl);
 
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
@@ -807,7 +679,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
                     mip_level_count: 1,
                     array_layer_count: 1,
-                    format: wgpu::TextureFormat::Depth32Float,
+                    format: wgpu::TextureFormat::Depth24PlusStencil8,
                     format_desc: wgpu_hal::gles::TextureFormatDesc {
                         internal: glow::RGBA,
                         external: glow::RGBA,
@@ -829,7 +701,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Depth32Float,
+                    format: wgpu::TextureFormat::Depth24PlusStencil8,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 },
             )
@@ -905,14 +777,17 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: true,
                 }),
-                stencil_ops: None,
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0),
+                    store: true,
+                }),
             }),
         });
 
         let uniform_bind_groups = [&left_eye_bind_group, &right_eye_bind_group];
 
         {
-            render_pass.set_pipeline(&pbr_pipeline);
+            render_pass.set_pipeline(&pipelines.pbr);
 
             for (model_index, model) in models.iter().enumerate() {
                 render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
@@ -951,7 +826,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 );
             }
 
-            render_pass.set_pipeline(&pbr_alpha_clipped_pipeline);
+            render_pass.set_pipeline(&pipelines.pbr_alpha_clipped);
 
             for (model_index, model) in models.iter().enumerate() {
                 render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
@@ -967,7 +842,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             }
 
             {
-                render_pass.set_pipeline(&line_pipeline);
+                render_pass.set_pipeline(&pipelines.line);
                 render_pass.set_vertex_buffer(0, line_buffer.slice(..));
 
                 for (i, viewport) in viewports.iter().enumerate() {
@@ -1171,4 +1046,166 @@ struct ModelReference {
 
 const fn one() -> f32 {
     1.0
+}
+
+struct Pipelines {
+    pbr: wgpu::RenderPipeline,
+    pbr_alpha_clipped: wgpu::RenderPipeline,
+    line: wgpu::RenderPipeline,
+}
+
+impl Pipelines {
+    fn new(
+        device: &wgpu::Device,
+        shader_cache: &ResourceCache<wgpu::ShaderModule>,
+        uniform_bgl: &wgpu::BindGroupLayout,
+        model_bgl: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let model_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("model pipeline layout"),
+                bind_group_layouts: &[&uniform_bgl, &model_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let vertex_buffers = &[
+            wgpu::VertexBufferLayout {
+                array_stride: 3 * 4,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            },
+            wgpu::VertexBufferLayout {
+                array_stride: 3 * 4,
+                attributes: &wgpu::vertex_attr_array![1 => Float32x3],
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            wgpu::VertexBufferLayout {
+                array_stride: 2 * 4,
+                attributes: &wgpu::vertex_attr_array![2 => Float32x2],
+                step_mode: wgpu::VertexStepMode::Vertex,
+            },
+            wgpu::VertexBufferLayout {
+                array_stride: 8 * 4,
+                attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4],
+                step_mode: wgpu::VertexStepMode::Instance,
+            },
+        ];
+
+        let vertex_state = wgpu::VertexState {
+            module: shader_cache.get("vertex", || {
+                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/vertex.spv"))
+            }),
+            entry_point: "vertex",
+            buffers: vertex_buffers,
+        };
+
+        let pbr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pbr pipeline"),
+            layout: Some(&model_pipeline_layout),
+            vertex: vertex_state.clone(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader_cache.get("fragment", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../compiled-shaders/fragment.spv"
+                    ))
+                }),
+                entry_point: "fragment",
+                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                bias: wgpu::DepthBiasState::default(),
+                stencil: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: Default::default(),
+        });
+
+        let pbr_alpha_clipped_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("pbr alpha clipped pipeline"),
+                layout: Some(&model_pipeline_layout),
+                vertex: vertex_state,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader_cache.get("fragment_alpha_clipped", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_alpha_clipped.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_alpha_clipped",
+                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Front),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth24PlusStencil8,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    bias: wgpu::DepthBiasState::default(),
+                    stencil: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview: Default::default(),
+            });
+
+        let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("line pipeline layout"),
+            bind_group_layouts: &[&uniform_bgl],
+            push_constant_ranges: &[],
+        });
+
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("line pipeline"),
+            layout: Some(&line_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: shader_cache.get("line_vertex", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../compiled-shaders/line_vertex.spv"
+                    ))
+                }),
+                entry_point: "line_vertex",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 6 * 4,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader_cache.get("flat_colour", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../compiled-shaders/flat_colour.spv"
+                    ))
+                }),
+                entry_point: "flat_colour",
+                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                bias: wgpu::DepthBiasState::default(),
+                stencil: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: Default::default(),
+        });
+
+        Self {
+            pbr: pbr_pipeline,
+            pbr_alpha_clipped: pbr_alpha_clipped_pipeline,
+            line: line_pipeline,
+        }
+    }
 }
