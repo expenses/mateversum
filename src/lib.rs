@@ -858,111 +858,115 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         let uniform_bind_groups = [&left_eye_bind_group, &right_eye_bind_group];
 
-        render_pass.set_stencil_reference(1);
+        let mirror_objects = true;
 
-        {
-            render_pass.set_pipeline(&pipelines.stencil_write);
-
-            render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
-            render_primitives(
-                &mut render_pass,
-                &mirror_model.model.opaque_primitives,
-                &mirror_primitives,
-                &viewports,
-                &uniform_bind_groups,
-                0..1,
-            );
-        }
-
-        render_pass.set_bind_group(2, &mirror_uniform_bind_group, &[]);
-
-        {
-            render_pass.set_pipeline(&pipelines.pbr_mirrored);
-
-            for (model_index, model) in models.iter().enumerate() {
-                render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
-
-                render_primitives(
-                    &mut render_pass,
-                    &model.model.opaque_primitives,
-                    &opaque_model_primitives[model_index],
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..model.instances.len() as u32,
-                );
-            }
+        if mirror_objects {
+            render_pass.set_stencil_reference(1);
 
             {
-                render_pass.set_vertex_buffer(3, player_heads_buffer.inner.slice(..));
+                render_pass.set_pipeline(&pipelines.stencil_write);
+
+                render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
                 render_primitives(
                     &mut render_pass,
-                    &head_model.opaque_primitives,
-                    &head_primitives,
+                    &mirror_model.model.opaque_primitives,
+                    &mirror_primitives,
                     &viewports,
                     &uniform_bind_groups,
-                    0..player_heads.len() as u32,
+                    0..1,
                 );
             }
+
+            render_pass.set_bind_group(2, &mirror_uniform_bind_group, &[]);
 
             {
-                render_pass.set_vertex_buffer(3, player_hands_buffer.inner.slice(..));
-                render_primitives(
-                    &mut render_pass,
-                    &hand_model.opaque_primitives,
-                    &hand_primitives,
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..player_hands.len() as u32,
-                );
-            }
+                render_pass.set_pipeline(&pipelines.pbr_mirrored);
 
-            render_pass.set_pipeline(&pipelines.pbr_alpha_clipped_mirrored);
+                for (model_index, model) in models.iter().enumerate() {
+                    render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
 
-            for (model_index, model) in models.iter().enumerate() {
-                render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
-
-                render_primitives(
-                    &mut render_pass,
-                    &model.model.alpha_clipped_primitives,
-                    &alpha_clipped_model_primitives[model_index],
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..model.instances.len() as u32,
-                );
-            }
-
-            {
-                render_pass.set_pipeline(&pipelines.line);
-                render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-
-                for (i, viewport) in viewports.iter().enumerate() {
-                    render_pass.set_viewport(
-                        viewport.x,
-                        viewport.y,
-                        viewport.width,
-                        viewport.height,
-                        0.0,
-                        1.0,
+                    render_primitives(
+                        &mut render_pass,
+                        &model.model.opaque_primitives,
+                        &opaque_model_primitives[model_index],
+                        &viewports,
+                        &uniform_bind_groups,
+                        0..model.instances.len() as u32,
                     );
+                }
 
-                    render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
-                    render_pass.draw(0..4, 0..1);
+                {
+                    render_pass.set_vertex_buffer(3, player_heads_buffer.inner.slice(..));
+                    render_primitives(
+                        &mut render_pass,
+                        &head_model.opaque_primitives,
+                        &head_primitives,
+                        &viewports,
+                        &uniform_bind_groups,
+                        0..player_heads.len() as u32,
+                    );
+                }
+
+                {
+                    render_pass.set_vertex_buffer(3, player_hands_buffer.inner.slice(..));
+                    render_primitives(
+                        &mut render_pass,
+                        &hand_model.opaque_primitives,
+                        &hand_primitives,
+                        &viewports,
+                        &uniform_bind_groups,
+                        0..player_hands.len() as u32,
+                    );
+                }
+
+                render_pass.set_pipeline(&pipelines.pbr_alpha_clipped_mirrored);
+
+                for (model_index, model) in models.iter().enumerate() {
+                    render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
+
+                    render_primitives(
+                        &mut render_pass,
+                        &model.model.alpha_clipped_primitives,
+                        &alpha_clipped_model_primitives[model_index],
+                        &viewports,
+                        &uniform_bind_groups,
+                        0..model.instances.len() as u32,
+                    );
+                }
+
+                {
+                    render_pass.set_pipeline(&pipelines.line);
+                    render_pass.set_vertex_buffer(0, line_buffer.slice(..));
+
+                    for (i, viewport) in viewports.iter().enumerate() {
+                        render_pass.set_viewport(
+                            viewport.x,
+                            viewport.y,
+                            viewport.width,
+                            viewport.height,
+                            0.0,
+                            1.0,
+                        );
+
+                        render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
+                        render_pass.draw(0..4, 0..1);
+                    }
                 }
             }
-        }
 
-        {
-            render_pass.set_pipeline(&pipelines.set_depth);
+            {
+                render_pass.set_pipeline(&pipelines.set_depth);
 
-            render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
-            render_primitives(
-                &mut render_pass,
-                &mirror_model.model.opaque_primitives,
-                &mirror_primitives,
-                &viewports,
-                &uniform_bind_groups,
-                0..1,
-            );
+                render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
+                render_primitives(
+                    &mut render_pass,
+                    &mirror_model.model.opaque_primitives,
+                    &mirror_primitives,
+                    &viewports,
+                    &uniform_bind_groups,
+                    0..1,
+                );
+            }
         }
 
         {
@@ -1248,7 +1252,7 @@ impl Pipelines {
         let model_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("model pipeline layout"),
-                bind_group_layouts: &[&uniform_bgl, &model_bgl],
+                bind_group_layouts: &[uniform_bgl, model_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -1344,7 +1348,7 @@ impl Pipelines {
 
         let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("line pipeline layout"),
-            bind_group_layouts: &[&uniform_bgl],
+            bind_group_layouts: &[uniform_bgl],
             push_constant_ranges: &[],
         });
 
@@ -1398,7 +1402,7 @@ impl Pipelines {
         let mirrored_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("mirrored pipeline layout"),
-                bind_group_layouts: &[&uniform_bgl, &model_bgl, &mirror_uniform_bgl],
+                bind_group_layouts: &[uniform_bgl, model_bgl, mirror_uniform_bgl],
                 push_constant_ranges: &[],
             });
 

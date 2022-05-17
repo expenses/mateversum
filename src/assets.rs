@@ -1131,11 +1131,8 @@ impl RequestClient {
                 .path_segments_mut()
                 .map_err(|_| path_segments_err())?
                 .extend(
-                    std::iter::once(url.host_str().ok_or_else(host_err)?).chain(
-                        url.path_segments()
-                            .into_iter()
-                            .flat_map(|segments| segments),
-                    ),
+                    std::iter::once(url.host_str().ok_or_else(host_err)?)
+                        .chain(url.path_segments().into_iter().flatten()),
                 );
 
             // The Web Cache API only lets you cache http:// or https:// urls.
@@ -1148,12 +1145,7 @@ impl RequestClient {
 
             // Append the host_str (the CID in this case) to the path.
             let new_path: Vec<_> = std::iter::once(cache_url.host_str().ok_or_else(host_err)?)
-                .chain(
-                    cache_url
-                        .path_segments()
-                        .into_iter()
-                        .flat_map(|segments| segments),
-                )
+                .chain(cache_url.path_segments().into_iter().flatten())
                 .map(|string| string.to_owned())
                 .collect();
             cache_url
