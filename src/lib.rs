@@ -952,6 +952,20 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }
 
         {
+            render_pass.set_pipeline(&pipelines.set_depth);
+
+            render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
+            render_primitives(
+                &mut render_pass,
+                &mirror_model.model.opaque_primitives,
+                &mirror_primitives,
+                &viewports,
+                &uniform_bind_groups,
+                0..1,
+            );
+        }
+
+        {
             render_pass.set_pipeline(&pipelines.pbr);
 
             for (model_index, model) in models.iter().enumerate() {
@@ -1220,6 +1234,7 @@ struct Pipelines {
     pbr_mirrored: wgpu::RenderPipeline,
     stencil_write: wgpu::RenderPipeline,
     pbr_alpha_clipped_mirrored: wgpu::RenderPipeline,
+    set_depth: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -1493,7 +1508,11 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "flat_blue",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                    targets: &[wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::empty(),
+                    }],
                 }),
                 primitive: wgpu::PrimitiveState {
                     front_face: wgpu::FrontFace::Cw,
@@ -1516,6 +1535,40 @@ impl Pipelines {
                 multiview: Default::default(),
             });
 
+        let set_depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("set depth pipeline"),
+            layout: Some(&model_pipeline_layout),
+            vertex: vertex_state.clone(),
+
+            fragment: Some(wgpu::FragmentState {
+                module: shader_cache.get("flat_blue", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../compiled-shaders/flat_blue.spv"
+                    ))
+                }),
+                entry_point: "flat_blue",
+                targets: &[wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                }],
+            }),
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                bias: wgpu::DepthBiasState::default(),
+                stencil: wgpu::StencilState::default(),
+            }),
+            multisample: Default::default(),
+            multiview: Default::default(),
+        });
+
         Self {
             pbr: pbr_pipeline,
             pbr_alpha_clipped: pbr_alpha_clipped_pipeline,
@@ -1523,6 +1576,7 @@ impl Pipelines {
             pbr_mirrored: pbr_mirrored_pipeline,
             stencil_write: stencil_write_pipeline,
             pbr_alpha_clipped_mirrored: pbr_alpha_clipped_mirrored_pipeline,
+            set_depth: set_depth_pipeline,
         }
     }
 }
