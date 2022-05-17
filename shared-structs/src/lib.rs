@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(not(target_arch = "spirv"))]
 use crevice::std140::AsStd140;
@@ -43,4 +43,34 @@ pub struct MaterialSettings {
     pub emissive_factor: Vec3,
     pub metallic_factor: f32,
     pub roughness_factor: f32,
+}
+
+// https://docs.gl/sl4/reflect
+pub fn reflect(incident: Vec3, normal: Vec3) -> Vec3 {
+    incident - 2.0 * normal.dot(incident) * normal
+}
+
+pub fn reflect_in_mirror(position: Vec3, mirror_position: Vec3, mirror_normal: Vec3) -> Vec3 {
+    reflect(position - mirror_position, mirror_normal) + mirror_position
+}
+
+#[test]
+fn mirror_logic_check() {
+    let mirror_position = Vec3::new(0.0, -1.0, 0.0);
+    let mirror_normal = Vec3::new(0.0, -1.0, 0.0);
+    let tree_position = Vec3::new(0.0, 1.0, 0.0);
+
+    dbg!(reflect_in_mirror(
+        tree_position,
+        mirror_position,
+        mirror_normal
+    ));
+
+    panic!();
+}
+
+#[cfg_attr(not(target_arch = "spirv"), derive(AsStd140))]
+pub struct MirrorUniforms {
+    pub position: Vec3,
+    pub normal: Vec3,
 }
