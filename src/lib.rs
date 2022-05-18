@@ -801,41 +801,52 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         // We borrow all the bind groups here because they need to be borrowed for the entire duration of the render pass.
 
-        let opaque_model_primitives: Vec<Vec<_>> = models
-            .iter()
-            .map(|model| {
-                model
-                    .model
-                    .opaque_primitives
-                    .iter()
-                    .map(|primitive| primitive.bind_group.borrow())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        let alpha_clipped_model_primitives: Vec<Vec<_>> = models
-            .iter()
-            .map(|model| {
-                model
-                    .model
-                    .alpha_clipped_primitives
-                    .iter()
-                    .map(|primitive| primitive.bind_group.borrow())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        let unlit_opaque_model_primitives: Vec<Vec<_>> = models
-            .iter()
-            .map(|model| {
-                model
-                    .model
-                    .unlit_opaque_primitives
-                    .iter()
-                    .map(|primitive| primitive.bind_group.borrow())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let model_bind_groups = ModelBindGroups {
+            pbr_opaque: models
+                .iter()
+                .map(|model| {
+                    model
+                        .model
+                        .opaque_primitives
+                        .iter()
+                        .map(|primitive| primitive.bind_group.borrow())
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            pbr_alpha_clipped: models
+                .iter()
+                .map(|model| {
+                    model
+                        .model
+                        .alpha_clipped_primitives
+                        .iter()
+                        .map(|primitive| primitive.bind_group.borrow())
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            unlit_opaque: models
+                .iter()
+                .map(|model| {
+                    model
+                        .model
+                        .unlit_opaque_primitives
+                        .iter()
+                        .map(|primitive| primitive.bind_group.borrow())
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            unlit_alpha_clipped: models
+                .iter()
+                .map(|model| {
+                    model
+                        .model
+                        .unlit_alpha_clipped_primitives
+                        .iter()
+                        .map(|primitive| primitive.bind_group.borrow())
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+        };
 
         let head_primitives = head_model
             .opaque_primitives
@@ -934,39 +945,52 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             render_pass.set_bind_group(2, &mirror_uniform_bind_group, &[]);
 
             {
-                render_pass.set_pipeline(&pipelines.pbr_mirrored);
+                render_pass.set_pipeline(&pipelines.pbr.opaque_mirrored);
 
                 render_all(
                     &mut render_pass,
                     &models,
                     |model| &model.opaque_primitives,
-                    &opaque_model_primitives,
+                    &model_bind_groups.pbr_opaque,
                     &viewports,
                     &uniform_bind_groups,
                     &heads_mirrored,
                     &hands,
                 );
 
-                render_pass.set_pipeline(&pipelines.unlit_mirrored);
+                render_pass.set_pipeline(&pipelines.unlit.opaque_mirrored);
 
                 render_all(
                     &mut render_pass,
                     &models,
                     |model| &model.unlit_opaque_primitives,
-                    &unlit_opaque_model_primitives,
+                    &model_bind_groups.unlit_opaque,
                     &viewports,
                     &uniform_bind_groups,
                     &heads_mirrored,
                     &hands,
                 );
 
-                render_pass.set_pipeline(&pipelines.pbr_alpha_clipped_mirrored);
+                render_pass.set_pipeline(&pipelines.pbr.alpha_clipped_mirrored);
 
                 render_all(
                     &mut render_pass,
                     &models,
                     |model| &model.alpha_clipped_primitives,
-                    &alpha_clipped_model_primitives,
+                    &model_bind_groups.pbr_alpha_clipped,
+                    &viewports,
+                    &uniform_bind_groups,
+                    &heads_mirrored,
+                    &hands,
+                );
+
+                render_pass.set_pipeline(&pipelines.unlit.alpha_clipped_mirrored);
+
+                render_all(
+                    &mut render_pass,
+                    &models,
+                    |model| &model.unlit_alpha_clipped_primitives,
+                    &model_bind_groups.unlit_alpha_clipped,
                     &viewports,
                     &uniform_bind_groups,
                     &heads_mirrored,
@@ -990,39 +1014,52 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }
 
         {
-            render_pass.set_pipeline(&pipelines.pbr);
+            render_pass.set_pipeline(&pipelines.pbr.opaque);
 
             render_all(
                 &mut render_pass,
                 &models,
                 |model| &model.opaque_primitives,
-                &opaque_model_primitives,
+                &model_bind_groups.pbr_opaque,
                 &viewports,
                 &uniform_bind_groups,
                 &heads,
                 &hands,
             );
 
-            render_pass.set_pipeline(&pipelines.unlit);
+            render_pass.set_pipeline(&pipelines.unlit.opaque);
 
             render_all(
                 &mut render_pass,
                 &models,
                 |model| &model.unlit_opaque_primitives,
-                &unlit_opaque_model_primitives,
+                &model_bind_groups.unlit_opaque,
                 &viewports,
                 &uniform_bind_groups,
                 &heads,
                 &hands,
             );
 
-            render_pass.set_pipeline(&pipelines.pbr_alpha_clipped);
+            render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
 
             render_all(
                 &mut render_pass,
                 &models,
                 |model| &model.alpha_clipped_primitives,
-                &alpha_clipped_model_primitives,
+                &model_bind_groups.pbr_alpha_clipped,
+                &viewports,
+                &uniform_bind_groups,
+                &heads,
+                &hands,
+            );
+
+            render_pass.set_pipeline(&pipelines.unlit.alpha_clipped);
+
+            render_all(
+                &mut render_pass,
+                &models,
+                |model| &model.unlit_alpha_clipped_primitives,
+                &model_bind_groups.unlit_alpha_clipped,
                 &viewports,
                 &uniform_bind_groups,
                 &heads,
@@ -1215,6 +1252,13 @@ fn render_primitives<'a>(
     }
 }
 
+struct ModelBindGroups<'a> {
+    pbr_opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    pbr_alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    unlit_opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    unlit_alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+}
+
 struct HeadOrHandsRenderingData<'a> {
     instances: &'a wgpu::Buffer,
     model: &'a assets::Model,
@@ -1239,8 +1283,8 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
             render_pass,
             primitives_getter(&model.model),
             &bind_groups[model_index],
-            &viewports,
-            &uniform_bind_groups,
+            viewports,
+            uniform_bind_groups,
             0..model.instances.len() as u32,
         );
     }
@@ -1252,8 +1296,8 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
             render_pass,
             primitives_getter(heads.model),
             heads.bind_groups,
-            &viewports,
-            &uniform_bind_groups,
+            viewports,
+            uniform_bind_groups,
             0..heads.num_instances,
         );
     }
@@ -1265,8 +1309,8 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
             render_pass,
             primitives_getter(hands.model),
             hands.bind_groups,
-            &viewports,
-            &uniform_bind_groups,
+            viewports,
+            uniform_bind_groups,
             0..hands.num_instances,
         );
     }
@@ -1336,15 +1380,113 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+struct PipelineSet {
+    opaque: wgpu::RenderPipeline,
+    alpha_clipped: wgpu::RenderPipeline,
+    opaque_mirrored: wgpu::RenderPipeline,
+    alpha_clipped_mirrored: wgpu::RenderPipeline,
+}
+
+impl PipelineSet {
+    fn new(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        mirrored_pipeline_layout: &wgpu::PipelineLayout,
+        normal_vertex: wgpu::VertexState,
+        mirrored_vertex: wgpu::VertexState,
+        opaque_fragment: wgpu::FragmentState,
+        alpha_clipped_fragment: wgpu::FragmentState,
+    ) -> Self {
+        let normal_primitive_state = wgpu::PrimitiveState {
+            front_face: wgpu::FrontFace::Cw,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        };
+
+        let normal_depth_state = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: wgpu::StencilState::default(),
+        };
+
+        let stencil_test = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        };
+
+        let stencil_test_depth_state = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: wgpu::StencilState {
+                front: stencil_test,
+                back: stencil_test,
+                read_mask: 0xff,
+                write_mask: 0xff,
+            },
+        };
+
+        let mirrored_primitive_state = wgpu::PrimitiveState {
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        };
+
+        Self {
+            opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(pipeline_layout),
+                vertex: normal_vertex.clone(),
+                fragment: Some(opaque_fragment.clone()),
+                primitive: normal_primitive_state,
+                depth_stencil: Some(normal_depth_state.clone()),
+                multisample: Default::default(),
+                multiview: Default::default(),
+            }),
+            alpha_clipped: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(pipeline_layout),
+                vertex: normal_vertex.clone(),
+                fragment: Some(alpha_clipped_fragment.clone()),
+                primitive: normal_primitive_state,
+                depth_stencil: Some(normal_depth_state),
+                multisample: Default::default(),
+                multiview: Default::default(),
+            }),
+            opaque_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(mirrored_pipeline_layout),
+                vertex: mirrored_vertex.clone(),
+                fragment: Some(opaque_fragment.clone()),
+                primitive: mirrored_primitive_state,
+                depth_stencil: Some(stencil_test_depth_state.clone()),
+                multisample: Default::default(),
+                multiview: Default::default(),
+            }),
+            alpha_clipped_mirrored: device.create_render_pipeline(
+                &wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(mirrored_pipeline_layout),
+                    vertex: mirrored_vertex,
+                    fragment: Some(alpha_clipped_fragment),
+                    primitive: mirrored_primitive_state,
+                    depth_stencil: Some(stencil_test_depth_state),
+                    multisample: Default::default(),
+                    multiview: Default::default(),
+                },
+            ),
+        }
+    }
+}
+
 struct Pipelines {
-    // todo: add alpha clipped unlit pipelines and use a struct for each variant of
-    // opaque/alpha clipped/opaque mirrored/alpha clipped mirrored.
-    pbr: wgpu::RenderPipeline,
-    pbr_alpha_clipped: wgpu::RenderPipeline,
-    pbr_mirrored: wgpu::RenderPipeline,
-    pbr_alpha_clipped_mirrored: wgpu::RenderPipeline,
-    unlit: wgpu::RenderPipeline,
-    unlit_mirrored: wgpu::RenderPipeline,
+    pbr: PipelineSet,
+    unlit: PipelineSet,
     line: wgpu::RenderPipeline,
     stencil_write: wgpu::RenderPipeline,
     set_depth: wgpu::RenderPipeline,
@@ -1410,64 +1552,6 @@ impl Pipelines {
             stencil: wgpu::StencilState::default(),
         };
 
-        let pbr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("pbr pipeline"),
-            layout: Some(&model_pipeline_layout),
-            vertex: vertex_state.clone(),
-            fragment: Some(wgpu::FragmentState {
-                module: shader_cache.get("fragment", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/fragment.spv"
-                    ))
-                }),
-                entry_point: "fragment",
-                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-            }),
-            primitive: normal_primitive_state,
-            depth_stencil: Some(normal_depth_state.clone()),
-            multisample: Default::default(),
-            multiview: Default::default(),
-        });
-
-        let pbr_alpha_clipped_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("pbr alpha clipped pipeline"),
-                layout: Some(&model_pipeline_layout),
-                vertex: vertex_state.clone(),
-                fragment: Some(wgpu::FragmentState {
-                    module: shader_cache.get("fragment_alpha_clipped", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_alpha_clipped.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_alpha_clipped",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-                }),
-                primitive: normal_primitive_state,
-                depth_stencil: Some(normal_depth_state.clone()),
-                multisample: Default::default(),
-                multiview: Default::default(),
-            });
-
-        let unlit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("unlit pipeline"),
-            layout: Some(&model_pipeline_layout),
-            vertex: vertex_state.clone(),
-            fragment: Some(wgpu::FragmentState {
-                module: shader_cache.get("fragment_unlit", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/fragment_unlit.spv"
-                    ))
-                }),
-                entry_point: "fragment_unlit",
-                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-            }),
-            primitive: normal_primitive_state,
-            depth_stencil: Some(normal_depth_state.clone()),
-            multisample: Default::default(),
-            multiview: Default::default(),
-        });
-
         let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("line pipeline layout"),
             bind_group_layouts: &[uniform_bgl],
@@ -1507,123 +1591,6 @@ impl Pipelines {
             multisample: Default::default(),
             multiview: Default::default(),
         });
-
-        let stencil_test = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::Equal,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::Keep,
-        };
-
-        let stencil_test_depth_state = wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth24PlusStencil8,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            bias: wgpu::DepthBiasState::default(),
-            stencil: wgpu::StencilState {
-                front: stencil_test,
-                back: stencil_test,
-                read_mask: 0xff,
-                write_mask: 0xff,
-            },
-        };
-
-        let mirrored_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("mirrored pipeline layout"),
-                bind_group_layouts: &[uniform_bgl, model_bgl, mirror_uniform_bgl],
-                push_constant_ranges: &[],
-            });
-
-        let mirrored_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        };
-
-        let pbr_mirrored_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("pbr mirrored pipeline"),
-                layout: Some(&mirrored_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: shader_cache.get("vertex_mirrored", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/vertex_mirrored.spv"
-                        ))
-                    }),
-                    entry_point: "vertex_mirrored",
-                    buffers: vertex_buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: shader_cache.get("fragment", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment.spv"
-                        ))
-                    }),
-                    entry_point: "fragment",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-                }),
-                primitive: mirrored_primitive_state,
-                depth_stencil: Some(stencil_test_depth_state.clone()),
-                multisample: Default::default(),
-                multiview: Default::default(),
-            });
-
-        let pbr_alpha_clipped_mirrored_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("pbr alpha clipped mirrored pipeline"),
-                layout: Some(&mirrored_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: shader_cache.get("vertex_mirrored", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/vertex_mirrored.spv"
-                        ))
-                    }),
-                    entry_point: "vertex_mirrored",
-                    buffers: vertex_buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: shader_cache.get("fragment_alpha_clipped", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_alpha_clipped.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_alpha_clipped",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-                }),
-                primitive: mirrored_primitive_state,
-                depth_stencil: Some(stencil_test_depth_state.clone()),
-                multisample: Default::default(),
-                multiview: Default::default(),
-            });
-
-        let unlit_mirrored_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("unlit mirrored pipeline"),
-                layout: Some(&mirrored_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: shader_cache.get("vertex_mirrored", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/vertex_mirrored.spv"
-                        ))
-                    }),
-                    entry_point: "vertex_mirrored",
-                    buffers: vertex_buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: shader_cache.get("fragment_unlit", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_unlit.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_unlit",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
-                }),
-                primitive: mirrored_primitive_state,
-                depth_stencil: Some(stencil_test_depth_state.clone()),
-                multisample: Default::default(),
-                multiview: Default::default(),
-            });
 
         let stencil_write = wgpu::StencilFaceState {
             compare: wgpu::CompareFunction::Always,
@@ -1692,16 +1659,77 @@ impl Pipelines {
             multiview: Default::default(),
         });
 
+        let mirrored_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("mirrored pipeline layout"),
+                bind_group_layouts: &[uniform_bgl, model_bgl, mirror_uniform_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let mirrored_vertex = wgpu::VertexState {
+            module: shader_cache.get("vertex_mirrored", || {
+                device.create_shader_module(&wgpu::include_spirv!(
+                    "../compiled-shaders/vertex_mirrored.spv"
+                ))
+            }),
+            entry_point: "vertex_mirrored",
+            buffers: vertex_buffers,
+        };
+
         Self {
-            pbr: pbr_pipeline,
-            pbr_alpha_clipped: pbr_alpha_clipped_pipeline,
+            pbr: PipelineSet::new(
+                device,
+                &model_pipeline_layout,
+                &mirrored_pipeline_layout,
+                vertex_state.clone(),
+                mirrored_vertex.clone(),
+                wgpu::FragmentState {
+                    module: shader_cache.get("fragment", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment.spv"
+                        ))
+                    }),
+                    entry_point: "fragment",
+                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                },
+                wgpu::FragmentState {
+                    module: shader_cache.get("fragment_alpha_clipped", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_alpha_clipped.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_alpha_clipped",
+                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                },
+            ),
             line: line_pipeline,
-            pbr_mirrored: pbr_mirrored_pipeline,
             stencil_write: stencil_write_pipeline,
-            pbr_alpha_clipped_mirrored: pbr_alpha_clipped_mirrored_pipeline,
             set_depth: set_depth_pipeline,
-            unlit: unlit_pipeline,
-            unlit_mirrored: unlit_mirrored_pipeline,
+            unlit: PipelineSet::new(
+                device,
+                &model_pipeline_layout,
+                &mirrored_pipeline_layout,
+                vertex_state,
+                mirrored_vertex,
+                wgpu::FragmentState {
+                    module: shader_cache.get("fragment_unlit", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_unlit.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_unlit",
+                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                },
+                wgpu::FragmentState {
+                    module: shader_cache.get("fragment_unlit_alpha_clipped", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_unlit_alpha_clipped.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_unlit_alpha_clipped",
+                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                },
+            ),
         }
     }
 }

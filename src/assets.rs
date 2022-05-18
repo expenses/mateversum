@@ -341,6 +341,7 @@ pub(crate) struct Model {
     pub(crate) opaque_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
     pub(crate) unlit_opaque_primitives: Vec<ModelPrimitive>,
+    pub(crate) unlit_alpha_clipped_primitives: Vec<ModelPrimitive>,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -385,6 +386,7 @@ pub(crate) async fn load_gltf_from_bytes(
     let mut opaque_primitives = std::collections::HashMap::new();
     let mut alpha_clipped_primitives = std::collections::HashMap::new();
     let mut unlit_opaque_primitives = std::collections::HashMap::new();
+    let mut unlit_alpha_clipped_primitives = std::collections::HashMap::new();
 
     for (node, mesh) in gltf
         .nodes()
@@ -398,8 +400,8 @@ pub(crate) async fn load_gltf_from_bytes(
             let primitive_map = match (material.alpha_mode(), material.unlit()) {
                 (gltf::material::AlphaMode::Opaque, false) => &mut opaque_primitives,
                 (_, false) => &mut alpha_clipped_primitives,
-                // todo: Handle alpha clipped unlit materials.
-                (_, true) => &mut unlit_opaque_primitives,
+                (gltf::material::AlphaMode::Opaque, true) => &mut unlit_opaque_primitives,
+                (_, true) => &mut unlit_alpha_clipped_primitives,
             };
 
             // We can't use `or_insert_with` here as that uses a closure and closures aren't async.
@@ -475,23 +477,23 @@ pub(crate) async fn load_gltf_from_bytes(
     let gltf = Rc::new(gltf);
     let base_url = Rc::new(base_url);
 
-    let opaque_primitives = opaque_primitives
-        .into_values()
-        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
-        .collect();
-    let alpha_clipped_primitives = alpha_clipped_primitives
-        .into_values()
-        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
-        .collect();
-    let unlit_opaque_primitives = unlit_opaque_primitives
-        .into_values()
-        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
-        .collect();
-
     Ok(Model {
-        opaque_primitives,
-        alpha_clipped_primitives,
-        unlit_opaque_primitives,
+        opaque_primitives: opaque_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
+        alpha_clipped_primitives: alpha_clipped_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
+        unlit_opaque_primitives: unlit_opaque_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
+        unlit_alpha_clipped_primitives: unlit_alpha_clipped_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
     })
 }
 

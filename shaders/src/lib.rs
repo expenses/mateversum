@@ -237,6 +237,45 @@ pub fn fragment_unlit(
     *output = linear_to_srgb(material_params.base.diffuse_colour).extend(1.0);
 }
 
+#[spirv(fragment)]
+pub fn fragment_unlit_alpha_clipped(
+    _position: Vec3,
+    _normal: Vec3,
+    uv: Vec2,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] _uniforms: &Uniforms,
+    #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 1)] _normal_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 4, uniform)] material_settings: &MaterialSettings,
+    #[spirv(descriptor_set = 1, binding = 5)] albedo_texture_sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 6)] _normal_texture_sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    output: &mut Vec4,
+) {
+    let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
+    let metallic_roughness_texture = TextureSampler::new(
+        metallic_roughness_texture,
+        *metallic_roughness_texture_sampler,
+        uv,
+    );
+    let emissive_texture = TextureSampler::new(emissive_texture, *emissive_texture_sampler, uv);
+
+    let material_params = ExtendedMaterialParams::new(
+        &albedo_texture,
+        &metallic_roughness_texture,
+        &emissive_texture,
+        &material_settings,
+    );
+
+    if material_params.alpha < 0.5 {
+        spirv_std::arch::kill();
+    }
+
+    *output = linear_to_srgb(material_params.base.diffuse_colour).extend(1.0);
+}
+
 fn linear_to_srgb(color_linear: Vec3) -> Vec3 {
     let selector = (color_linear - 0.0031308).ceil(); // 0 if under value, 1 if over
     let under = 12.92 * color_linear;
