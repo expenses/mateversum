@@ -94,7 +94,8 @@ features = [
   'MessageEvent',
   'CacheStorage',
   'Cache',
-  'ResponseInit'
+  'ResponseInit',
+  'HtmlBrElement',
 ]
 
 [patch.crates-io]

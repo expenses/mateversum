@@ -102,6 +102,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let vr_button = create_button("Start VR");
     let ar_button = create_button("Start AR");
 
+    append_break();
+
     let start_vr_future = button_click_future(&vr_button);
     let start_ar_future = button_click_future(&ar_button);
 
@@ -1648,4 +1650,24 @@ impl Pipelines {
             set_depth: set_depth_pipeline,
         }
     }
+}
+
+pub fn append_break() {
+    let br: web_sys::HtmlBrElement = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("br")
+        .unwrap()
+        .unchecked_into();
+
+    let body = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .body()
+        .unwrap();
+
+    body.append_child(&web_sys::Element::from(br))
+        .unwrap();
 }

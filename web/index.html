@@ -5,160 +5,180 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     </head>
     <body>
-      <script src="coi-serviceworker.js"></script>
-      <script type="module">
-        import { trystero } from './networking.js';
+        <textarea readonly id="log" , style="width: 384px; height: 384px;"></textarea>
+        <br />
+        <script src="coi-serviceworker.js"></script>
+        <script type="module">
+            import { trystero } from "./networking.js";
 
-        window.onerror = function (msg, url, linenumber) {
-            alert(`Error message: ${msg}\nURL: ${url}\nLine Number: ${linenumber}`);
-            return true;
-        };
+            var base_log_function = console.log;
+            console.log = function () {
+                base_log_function.apply(console, arguments);
 
-        window.onunhandledrejection = event => {
-            alert(`Unhandled rejection: ${event.reason}`);
-        };
-
-        const selfId = trystero.selfId;
-        const joinRoom = trystero.joinRoom;
-
-        const room_name = "main";
-
-        const ecdsa_config = {
-            name: "ECDSA",
-            namedCurve: "P-384",
-        };
-
-        let key_pair;
-
-        const existing_key_pair = JSON.parse(localStorage.getItem("key_pair"));
-
-        if (existing_key_pair == null) {
-            key_pair = await crypto.subtle.generateKey(ecdsa_config, true, ["sign", "verify"]);
-
-            console.log("Generated new keypair");
-
-            localStorage.setItem(
-                "key_pair",
-                JSON.stringify({
-                    publicKey: await crypto.subtle.exportKey("jwk", key_pair.publicKey),
-                    privateKey: await crypto.subtle.exportKey("jwk", key_pair.privateKey),
-                })
-            );
-        } else {
-            key_pair = {
-                publicKey: await crypto.subtle.importKey("jwk", existing_key_pair.publicKey, ecdsa_config, true, ["verify"]),
-                privateKey: await crypto.subtle.importKey("jwk", existing_key_pair.privateKey, ecdsa_config, true, ["sign"]),
+                var args = Array.prototype.slice.call(arguments);
+                for (var i = 0; i < args.length; i++) {
+                    var node = text_node(args[i]);
+                    document.querySelector("#log").value += "\n" + args[i];
+                }
             };
 
-            console.log("Loaded existing keypair");
-        }
-
-        const contacts = JSON.parse(localStorage.getItem("contacts")) || {};
-
-        const room = joinRoom({ appId: "webxr_pbr_wasm", signing_key: key_pair }, "main");
-
-        const udpLike = { ordered: false, maxRetransmits: 0 };
-
-        const realtime_room = joinRoom({ appId: "webxr_pbr_wasm", signing_key: key_pair, rtcConfig: udpLike }, "main_realtime");
-
-        const self_key_id = await make_key_id(key_pair.publicKey);
-        console.log(`My transient peer ID: ${selfId}`);
-        console.log(`My key id: ${self_key_id}`);
-
-        let exported = await crypto.subtle.exportKey("jwk", key_pair.publicKey);
-
-        const peers = {};
-
-        function contact_name(peer_id) {
-            const key_id = peers[peer_id].key_id;
-
-            return `[${key_id in contacts ? contacts[key_id] : "unknown"}][${key_id}][${peer_id}]`;
-        }
-
-        async function make_key_id(key) {
-            const exported_key = await crypto.subtle.exportKey("raw", key);
-            const key_digest = await crypto.subtle.digest("SHA-256", exported_key);
-
-            const pack = (buff) => {
-                return btoa(String.fromCharCode.apply(null, new Uint8Array(buff)));
-            };
-
-            return pack(key_digest).slice(0, 10);
-        }
-
-        room.onPeerJoin(async (peer, peer_id) => {
-            peers[peer_id] = {
-                peer: peer,
-                key_id: await make_key_id(peer.key),
-            };
-
-            console.log(`${contact_name(peer_id)} joined`);
-        });
-
-        room.onPeerLeave(async (peer_id) => {
-            console.log(`${contact_name(peer_id)} left`);
-
-            //delete peers[peer_id];
-        });
-
-        realtime_room.onPeerJoin(async (peer, peer_id) => {
-            peers[peer_id] = {
-                peer: peer,
-                key_id: await make_key_id(peer.key),
-            };
-
-            console.log(`${contact_name(peer_id)} joined the realtime room`);
-        });
-
-        realtime_room.onPeerLeave(async (peer_id) => {
-            console.log(`${contact_name(peer_id)} left the realtime room`);
-
-            //delete peers[peer_id];
-        });
-
-        const [send_chat_msg, get_chat_msg] = room.makeAction("chat");
-        const [send_xr_data, get_xr_data] = realtime_room.makeAction("xr-data");
-
-        get_chat_msg((msg, peer_id) => {
-            const key_id = peers[peer_id].key_id;
-
-            console.log(`${contact_name(peer_id)}: ${msg}`);
-        });
-
-        window.send_chat_msg = send_chat_msg;
-
-        window.add_contact = (key_id, name) => {
-            contacts[key_id] = name;
-            console.log(contacts);
-            localStorage.setItem("contacts", JSON.stringify(contacts));
-        };
-
-        window.ls = () => {
-            console.log("Connected:");
-            console.log(`* [<you>][${self_key_id}][${selfId}]`);
-            const room_peers = room.getPeers();
-            for (let i = 0; i < room_peers.length; i++) {
-                console.log(`- ${contact_name(room_peers[i])}`);
+            function text_node(message) {
+                var node = document.createElement("div");
+                var text_node = document.createTextNode(message);
+                node.appendChild(text_node);
+                return node;
             }
-        };
 
-        window.send_xr_data = send_xr_data;
+            window.onerror = function (msg, url, linenumber) {
+                alert(`Error message: ${msg}\nURL: ${url}\nLine Number: ${linenumber}`);
+                return true;
+            };
 
-        let handle_xr_data = (data, index) => {
-            console.log(`Got xr data but the handler was not set`);
-        };
+            window.onunhandledrejection = (event) => {
+                alert(`Unhandled rejection: ${event.reason}`);
+            };
 
-        get_xr_data((data, peer_id) => {
-            handle_xr_data(data, peer_id);
-        });
+            const selfId = trystero.selfId;
+            const joinRoom = trystero.joinRoom;
 
-        window.set_xr_data_handler = (func) => {
-            handle_xr_data = func;
-        };
+            const room_name = "main";
 
-        import init, { run } from "./pkg/mateversum.js";
-        await init();
-        await run();
-      </script>
+            const ecdsa_config = {
+                name: "ECDSA",
+                namedCurve: "P-384",
+            };
+
+            let key_pair;
+
+            const existing_key_pair = JSON.parse(localStorage.getItem("key_pair"));
+
+            if (existing_key_pair == null) {
+                key_pair = await crypto.subtle.generateKey(ecdsa_config, true, ["sign", "verify"]);
+
+                console.log("Generated new keypair");
+
+                localStorage.setItem(
+                    "key_pair",
+                    JSON.stringify({
+                        publicKey: await crypto.subtle.exportKey("jwk", key_pair.publicKey),
+                        privateKey: await crypto.subtle.exportKey("jwk", key_pair.privateKey),
+                    })
+                );
+            } else {
+                key_pair = {
+                    publicKey: await crypto.subtle.importKey("jwk", existing_key_pair.publicKey, ecdsa_config, true, ["verify"]),
+                    privateKey: await crypto.subtle.importKey("jwk", existing_key_pair.privateKey, ecdsa_config, true, ["sign"]),
+                };
+
+                console.log("Loaded existing keypair");
+            }
+
+            const contacts = JSON.parse(localStorage.getItem("contacts")) || {};
+
+            const room = joinRoom({ appId: "webxr_pbr_wasm", signing_key: key_pair }, "main");
+
+            const udpLike = { ordered: false, maxRetransmits: 0 };
+
+            const realtime_room = joinRoom({ appId: "webxr_pbr_wasm", signing_key: key_pair, rtcConfig: udpLike }, "main_realtime");
+
+            const self_key_id = await make_key_id(key_pair.publicKey);
+            console.log(`My transient peer ID: ${selfId}`);
+            console.log(`My key id: ${self_key_id}`);
+
+            let exported = await crypto.subtle.exportKey("jwk", key_pair.publicKey);
+
+            const peers = {};
+
+            function contact_name(peer_id) {
+                const key_id = peers[peer_id].key_id;
+
+                return `[${key_id in contacts ? contacts[key_id] : "unknown"}][${key_id}][${peer_id}]`;
+            }
+
+            async function make_key_id(key) {
+                const exported_key = await crypto.subtle.exportKey("raw", key);
+                const key_digest = await crypto.subtle.digest("SHA-256", exported_key);
+
+                const pack = (buff) => {
+                    return btoa(String.fromCharCode.apply(null, new Uint8Array(buff)));
+                };
+
+                return pack(key_digest).slice(0, 10);
+            }
+
+            room.onPeerJoin(async (peer, peer_id) => {
+                peers[peer_id] = {
+                    peer: peer,
+                    key_id: await make_key_id(peer.key),
+                };
+
+                console.log(`${contact_name(peer_id)} joined`);
+            });
+
+            room.onPeerLeave(async (peer_id) => {
+                console.log(`${contact_name(peer_id)} left`);
+
+                //delete peers[peer_id];
+            });
+
+            realtime_room.onPeerJoin(async (peer, peer_id) => {
+                peers[peer_id] = {
+                    peer: peer,
+                    key_id: await make_key_id(peer.key),
+                };
+
+                console.log(`${contact_name(peer_id)} joined the realtime room`);
+            });
+
+            realtime_room.onPeerLeave(async (peer_id) => {
+                console.log(`${contact_name(peer_id)} left the realtime room`);
+
+                //delete peers[peer_id];
+            });
+
+            const [send_chat_msg, get_chat_msg] = room.makeAction("chat");
+            const [send_xr_data, get_xr_data] = realtime_room.makeAction("xr-data");
+
+            get_chat_msg((msg, peer_id) => {
+                const key_id = peers[peer_id].key_id;
+
+                console.log(`${contact_name(peer_id)}: ${msg}`);
+            });
+
+            window.send_chat_msg = send_chat_msg;
+
+            window.add_contact = (key_id, name) => {
+                contacts[key_id] = name;
+                console.log(contacts);
+                localStorage.setItem("contacts", JSON.stringify(contacts));
+            };
+
+            window.ls = () => {
+                console.log("Connected:");
+                console.log(`* [<you>][${self_key_id}][${selfId}]`);
+                const room_peers = room.getPeers();
+                for (let i = 0; i < room_peers.length; i++) {
+                    console.log(`- ${contact_name(room_peers[i])}`);
+                }
+            };
+
+            window.send_xr_data = send_xr_data;
+
+            let handle_xr_data = (data, index) => {
+                console.log(`Got xr data but the handler was not set`);
+            };
+
+            get_xr_data((data, peer_id) => {
+                handle_xr_data(data, peer_id);
+            });
+
+            window.set_xr_data_handler = (func) => {
+                handle_xr_data = func;
+            };
+
+            import init, { run } from "./pkg/mateversum.js";
+            await init();
+            await run();
+        </script>
     </body>
 </html>
