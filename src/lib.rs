@@ -1337,6 +1337,8 @@ where
 }
 
 struct Pipelines {
+    // todo: add alpha clipped unlit pipelines and use a struct for each variant of
+    // opaque/alpha clipped/opaque mirrored/alpha clipped mirrored.
     pbr: wgpu::RenderPipeline,
     pbr_alpha_clipped: wgpu::RenderPipeline,
     pbr_mirrored: wgpu::RenderPipeline,
