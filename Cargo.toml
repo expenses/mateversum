@@ -14,7 +14,7 @@ log = "0.4.16"
 wasm-bindgen-futures = "0.4.30"
 wgpu = { version = "0.12.0", features = ["webgl", "spirv"] }
 futures = "0.3.21"
-gltf = "1.0.0"
+gltf = { version = "1.0.0", features = ["KHR_materials_unlit"] }
 gltf-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 glam = "0.20.5"
 bytemuck = { version = "1.9.1", features = ["derive"] }
