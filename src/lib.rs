@@ -76,7 +76,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .fetch_bytes_without_caching(
                 &url::Url::options()
                     .base_url(Some(&href))
-                    .parse("new_sponza.json")
+                    .parse("sponza_with_mirror.json")
                     .unwrap(),
                 None,
             )
