@@ -184,9 +184,9 @@ pub(super) fn load_standard_image_format(
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: context.shader_cache.get("blit", || {
-                            context
-                                .device
-                                .create_shader_module(&wgpu::include_spirv!("../../compiled-shaders/blit.spv"))
+                            context.device.create_shader_module(&wgpu::include_spirv!(
+                                "../../compiled-shaders/blit.spv"
+                            ))
                         }),
                         entry_point: "blit",
                         targets: &[format.into()],

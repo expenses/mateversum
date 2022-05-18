@@ -2085,7 +2085,7 @@ dependencies = [
 [[package]]
 name = "wasm-webxr-helpers"
 version = "0.1.0"
-source = "git+https://github.com/expenses/wasm-webxr-helpers#697b72c36da579d0556d1467bf8333088f4b1034"
+source = "git+https://github.com/expenses/wasm-webxr-helpers#98b2a43b2a7719b9733d7a0805d815740223a88b"
 dependencies = [
  "js-sys",
  "raw-window-handle",

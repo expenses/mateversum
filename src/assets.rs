@@ -218,17 +218,20 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(albedo_texture) = pbr.base_color_texture() {
-                    upload_model_texture_from_gltf(
-                        &albedo_texture.texture(),
-                        &textures.albedo_texture,
-                        true,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    let pbr = material.pbr_metallic_roughness();
+                    if let Some(albedo_texture) = pbr.base_color_texture() {
+                        upload_model_texture_from_gltf(
+                            &albedo_texture.texture(),
+                            &textures.albedo_texture,
+                            true,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -237,16 +240,19 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                if let Some(normal_texture) = material.normal_texture() {
-                    upload_model_texture_from_gltf(
-                        &normal_texture.texture(),
-                        &textures.normal_texture,
-                        false,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    if let Some(normal_texture) = material.normal_texture() {
+                        upload_model_texture_from_gltf(
+                            &normal_texture.texture(),
+                            &textures.normal_texture,
+                            false,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -255,17 +261,20 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
-                    upload_model_texture_from_gltf(
-                        &metallic_roughness_texture.texture(),
-                        &textures.metallic_roughness_texture,
-                        false,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    let pbr = material.pbr_metallic_roughness();
+                    if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
+                        upload_model_texture_from_gltf(
+                            &metallic_roughness_texture.texture(),
+                            &textures.metallic_roughness_texture,
+                            false,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -274,16 +283,19 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                if let Some(emissive_texture) = material.emissive_texture() {
-                    upload_model_texture_from_gltf(
-                        &emissive_texture.texture(),
-                        &textures.emissive_texture,
-                        true,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    if let Some(emissive_texture) = material.emissive_texture() {
+                        upload_model_texture_from_gltf(
+                            &emissive_texture.texture(),
+                            &textures.emissive_texture,
+                            true,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -328,6 +340,7 @@ impl StagingModelPrimitive {
 pub(crate) struct Model {
     pub(crate) opaque_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
+    pub(crate) unlit_opaque_primitives: Vec<ModelPrimitive>,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -371,6 +384,7 @@ pub(crate) async fn load_gltf_from_bytes(
 
     let mut opaque_primitives = std::collections::HashMap::new();
     let mut alpha_clipped_primitives = std::collections::HashMap::new();
+    let mut unlit_opaque_primitives = std::collections::HashMap::new();
 
     for (node, mesh) in gltf
         .nodes()
@@ -381,9 +395,11 @@ pub(crate) async fn load_gltf_from_bytes(
         for primitive in mesh.primitives() {
             let material = primitive.material();
 
-            let primitive_map = match material.alpha_mode() {
-                gltf::material::AlphaMode::Opaque => &mut opaque_primitives,
-                _ => &mut alpha_clipped_primitives,
+            let primitive_map = match (material.alpha_mode(), material.unlit()) {
+                (gltf::material::AlphaMode::Opaque, false) => &mut opaque_primitives,
+                (_, false) => &mut alpha_clipped_primitives,
+                // todo: Handle alpha clipped unlit materials.
+                (_, true) => &mut unlit_opaque_primitives,
             };
 
             // We can't use `or_insert_with` here as that uses a closure and closures aren't async.
@@ -459,30 +475,23 @@ pub(crate) async fn load_gltf_from_bytes(
     let gltf = Rc::new(gltf);
     let base_url = Rc::new(base_url);
 
-    let mut opaque_primitives_vec = Vec::new();
-    let mut alpha_clipped_primitives_vec = Vec::new();
-
-    for (primitive, is_opaque) in opaque_primitives
+    let opaque_primitives = opaque_primitives
         .into_values()
-        .map(|primitive| (primitive, true))
-        .chain(
-            alpha_clipped_primitives
-                .into_values()
-                .map(|primitive| (primitive, false)),
-        )
-    {
-        let primitive = primitive.upload(&gltf, context, &buffers, &base_url);
-
-        if is_opaque {
-            opaque_primitives_vec.push(primitive);
-        } else {
-            alpha_clipped_primitives_vec.push(primitive);
-        }
-    }
+        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+        .collect();
+    let alpha_clipped_primitives = alpha_clipped_primitives
+        .into_values()
+        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+        .collect();
+    let unlit_opaque_primitives = unlit_opaque_primitives
+        .into_values()
+        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+        .collect();
 
     Ok(Model {
-        opaque_primitives: opaque_primitives_vec,
-        alpha_clipped_primitives: alpha_clipped_primitives_vec,
+        opaque_primitives,
+        alpha_clipped_primitives,
+        unlit_opaque_primitives,
     })
 }
 
@@ -1133,7 +1142,7 @@ impl RequestClient {
                 .map_err(|_| path_segments_err())?
                 .extend(
                     std::iter::once(url.host_str().ok_or_else(host_err)?)
-                        .chain(url.path_segments().into_iter().flat_map(|segments| segments)),
+                        .chain(url.path_segments().into_iter().flatten()),
                 );
                 */
 
@@ -1147,7 +1156,7 @@ impl RequestClient {
 
             // Append the host_str (the CID in this case) to the path.
             let new_path: Vec<_> = std::iter::once(cache_url.host_str().ok_or_else(host_err)?)
-                .chain(cache_url.path_segments().into_iter().flat_map(|segments| segments))
+                .chain(cache_url.path_segments().into_iter().flatten())
                 .map(|string| string.to_owned())
                 .collect();
             cache_url
