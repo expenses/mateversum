@@ -136,7 +136,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let mut layer_init = web_sys::XrWebGlLayerInit::new();
 
-    layer_init.alpha(false).depth(true).stencil(true);
+    layer_init.alpha(false).depth(false).stencil(false);
 
     let xr_gl_layer = web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(
         &xr_session,
@@ -286,6 +286,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }),
     );
 
+    let tonemap_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("mirror bind group layout"),
+        entries: &[sampler_entry(0), texture_entry(1)],
+    });
+
     let shader_cache = Rc::new(ResourceCache::default());
 
     let pipelines = Pipelines::new(
@@ -294,6 +299,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &uniform_bgl,
         &model_bgl,
         &mirror_uniform_bgl,
+        &tonemap_bgl,
     );
 
     let context = Rc::new(ModelLoadContext {
@@ -579,6 +585,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }],
     });
 
+    let framebuffer_cache = ResourceCache::default();
+    let bind_group_cache = ResourceCache::default();
+
     wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |_time, frame| {
         let models = models.borrow();
 
@@ -762,26 +771,47 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             )
         };
 
-        let depth = unsafe {
-            device.create_texture_from_hal::<wgpu_hal::gles::Api>(
-                wgpu_hal::gles::Texture {
-                    inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
-                    mip_level_count: 1,
-                    array_layer_count: 1,
-                    format: wgpu::TextureFormat::Depth24PlusStencil8,
-                    format_desc: wgpu_hal::gles::TextureFormatDesc {
-                        internal: glow::RGBA,
-                        external: glow::RGBA,
-                        data_type: glow::UNSIGNED_BYTE,
-                    },
-                    copy_size: wgpu_hal::CopyExtent {
+        let hdr_framebuffer = framebuffer_cache.get("hdr framebuffer", || {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hdr framebuffer"),
+                    size: wgpu::Extent3d {
                         width: base_layer.framebuffer_width(),
                         height: base_layer.framebuffer_height(),
-                        depth: 1,
+                        depth_or_array_layers: 1,
                     },
-                },
-                &wgpu::TextureDescriptor {
-                    label: Some("framebuffer (depth)"),
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                })
+                .create_view(&Default::default())
+        });
+
+        let tonemap_bind_group = bind_group_cache.get("tonemap bind group", || {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tonemap bind group"),
+                layout: &tonemap_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&linear_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&hdr_framebuffer),
+                    },
+                ],
+            })
+        });
+
+        // We have to make this new every frame because clearing it doesn't seem to work. Great.
+        let depth = {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("depth"),
                     size: wgpu::Extent3d {
                         width: base_layer.framebuffer_width(),
                         height: base_layer.framebuffer_height(),
@@ -792,12 +822,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Depth24PlusStencil8,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                },
-            )
+                })
+                .create_view(&Default::default())
         };
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
         // We borrow all the bind groups here because they need to be borrowed for the entire duration of the render pass.
 
@@ -873,16 +902,16 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
             color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &view,
+                view: &hdr_framebuffer,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: if mode == web_sys::XrSessionMode::ImmersiveAr {
                         wgpu::LoadOp::Load
                     } else {
                         wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.1 / 5.0,
+                            g: 0.2 / 5.0,
+                            b: 0.3 / 5.0,
                             a: 1.0,
                         })
                     },
@@ -890,7 +919,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 },
             }],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth_view,
+                view: &depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: true,
@@ -1085,6 +1114,32 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 render_pass.draw(0..4, 0..1);
             }
         }
+
+        drop(render_pass);
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("tonemap render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1 / 5.0,
+                        g: 0.2 / 5.0,
+                        b: 0.3 / 5.0,
+                        a: 1.0,
+                    }),
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: None,
+        });
+
+        render_pass.set_pipeline(&pipelines.tonemap);
+
+        render_pass.set_bind_group(0, tonemap_bind_group, &[]);
+
+        render_pass.draw(0..3, 0..1);
 
         drop(render_pass);
 
@@ -1398,7 +1453,7 @@ impl PipelineSet {
         alpha_clipped_fragment: wgpu::FragmentState,
     ) -> Self {
         let normal_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Cw,
+            front_face: wgpu::FrontFace::Ccw,
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
@@ -1432,7 +1487,7 @@ impl PipelineSet {
         };
 
         let mirrored_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Ccw,
+            front_face: wgpu::FrontFace::Cw,
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
@@ -1490,6 +1545,7 @@ struct Pipelines {
     line: wgpu::RenderPipeline,
     stencil_write: wgpu::RenderPipeline,
     set_depth: wgpu::RenderPipeline,
+    tonemap: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -1499,6 +1555,7 @@ impl Pipelines {
         uniform_bgl: &wgpu::BindGroupLayout,
         model_bgl: &wgpu::BindGroupLayout,
         mirror_uniform_bgl: &wgpu::BindGroupLayout,
+        tonemap_bgl: &wgpu::BindGroupLayout,
     ) -> Self {
         let model_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1539,7 +1596,7 @@ impl Pipelines {
         };
 
         let normal_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Cw,
+            front_face: wgpu::FrontFace::Ccw,
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
@@ -1581,13 +1638,47 @@ impl Pipelines {
                     ))
                 }),
                 entry_point: "flat_colour",
-                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                targets: &[wgpu::TextureFormat::Rgba16Float.into()],
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineList,
                 ..Default::default()
             },
             depth_stencil: Some(normal_depth_state.clone()),
+            multisample: Default::default(),
+            multiview: Default::default(),
+        });
+
+        let tonemap_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[tonemap_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let tonemap_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tonemap pipeline"),
+            layout: Some(&tonemap_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: shader_cache.get("fullscreen_tri", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../compiled-shaders/fullscreen_tri.spv"
+                    ))
+                }),
+                entry_point: "fullscreen_tri",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader_cache.get("tonemap", || {
+                    device.create_shader_module(&wgpu::include_spirv!(
+                        "../compiled-shaders/tonemap.spv"
+                    ))
+                }),
+                entry_point: "tonemap",
+                targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
             multisample: Default::default(),
             multiview: Default::default(),
         });
@@ -1613,7 +1704,7 @@ impl Pipelines {
                     }),
                     entry_point: "flat_blue",
                     targets: &[wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        format: wgpu::TextureFormat::Rgba16Float,
                         blend: None,
                         write_mask: wgpu::ColorWrites::empty(),
                     }],
@@ -1648,7 +1739,7 @@ impl Pipelines {
                 }),
                 entry_point: "flat_blue",
                 targets: &[wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format: wgpu::TextureFormat::Rgba16Float,
                     blend: None,
                     write_mask: wgpu::ColorWrites::empty(),
                 }],
@@ -1690,7 +1781,7 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "fragment",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
                 wgpu::FragmentState {
                     module: shader_cache.get("fragment_alpha_clipped", || {
@@ -1699,12 +1790,13 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "fragment_alpha_clipped",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
             ),
             line: line_pipeline,
             stencil_write: stencil_write_pipeline,
             set_depth: set_depth_pipeline,
+            tonemap: tonemap_pipeline,
             unlit: PipelineSet::new(
                 device,
                 &model_pipeline_layout,
@@ -1718,7 +1810,7 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "fragment_unlit",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
                 wgpu::FragmentState {
                     module: shader_cache.get("fragment_unlit_alpha_clipped", || {
@@ -1727,7 +1819,7 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "fragment_unlit_alpha_clipped",
-                    targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
+                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
             ),
         }

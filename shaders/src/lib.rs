@@ -32,7 +32,6 @@ pub fn vertex(
 
     let position = instance_translation + (instance_rotation * instance_scale * position);
     *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
-    builtin_pos.y = -builtin_pos.y;
     *out_position = position;
     *out_normal = instance_rotation * normal;
     *out_uv = uv;
@@ -141,8 +140,7 @@ pub fn fragment(
 
     let result = glam_pbr::basic_brdf(brdf_params);
 
-    *output =
-        linear_to_srgb(result.diffuse + result.specular + material_params.emission).extend(1.0);
+    *output = (result.diffuse + result.specular + material_params.emission).extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -198,8 +196,7 @@ pub fn fragment_alpha_clipped(
 
     let result = glam_pbr::basic_brdf(brdf_params);
 
-    *output =
-        linear_to_srgb(result.diffuse + result.specular + material_params.emission).extend(1.0);
+    *output = (result.diffuse + result.specular + material_params.emission).extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -234,7 +231,7 @@ pub fn fragment_unlit(
         &material_settings,
     );
 
-    *output = linear_to_srgb(material_params.base.diffuse_colour).extend(1.0);
+    *output = material_params.base.diffuse_colour.extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -273,7 +270,7 @@ pub fn fragment_unlit_alpha_clipped(
         spirv_std::arch::kill();
     }
 
-    *output = linear_to_srgb(material_params.base.diffuse_colour).extend(1.0);
+    *output = material_params.base.diffuse_colour.extend(1.0);
 }
 
 fn linear_to_srgb(color_linear: Vec3) -> Vec3 {
@@ -325,8 +322,7 @@ pub fn fullscreen_tri(
     #[spirv(position)] builtin_pos: &mut Vec4,
 ) {
     *uv = Vec2::new(((vert_idx << 1) & 2) as f32, (vert_idx & 2) as f32);
-    let mut pos = 2.0 * *uv - Vec2::ONE;
-    pos.y = -pos.y;
+    let pos = 2.0 * *uv - Vec2::ONE;
 
     *builtin_pos = Vec4::new(pos.x, pos.y, 0.0, 1.0);
 }
@@ -350,7 +346,6 @@ pub fn line_vertex(
     out_colour: &mut Vec3,
 ) {
     *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
-    builtin_pos.y = -builtin_pos.y;
     *out_colour = colour;
 }
 
@@ -384,7 +379,6 @@ pub fn vertex_mirrored(
             mirror_uniforms.normal,
         )
         .extend(1.0);
-    builtin_pos.y = -builtin_pos.y;
     *out_position = position;
     *out_normal = instance_rotation * normal;
     *out_uv = uv;
@@ -394,4 +388,32 @@ pub fn vertex_mirrored(
 #[spirv(fragment)]
 pub fn flat_blue(output: &mut Vec4) {
     *output = Vec4::new(0.0, 0.0, 1.0, 1.0);
+}
+
+fn saturate(value: Vec3) -> Vec3 {
+    value.max(Vec3::ZERO).min(Vec3::ONE)
+}
+
+// https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+fn aces_filmic(x: Vec3) -> Vec3 {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
+#[spirv(fragment)]
+pub fn tonemap(
+    uv: Vec2,
+    #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 1)] texture: &Image!(2D, type=f32, sampled),
+    output: &mut Vec4,
+) {
+    let sample: Vec4 = texture.sample(*sampler, uv);
+
+    let linear = aces_filmic(sample.truncate());
+
+    *output = linear_to_srgb(linear).extend(1.0)
 }

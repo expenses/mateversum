@@ -104,8 +104,8 @@ wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "web
 wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-framebuffer" }
-wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
-wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr" }
+wgpu = { path = "../../wgpu/wgpu" }
+wgpu-hal = { path = "../../wgpu/wgpu-hal" }
 
 [workspace]
 members = [
