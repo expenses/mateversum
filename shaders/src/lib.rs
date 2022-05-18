@@ -303,21 +303,16 @@ pub fn vertex_mirrored(
     let instance_translation = instance_translation_and_scale.truncate();
 
     let position = instance_translation + (instance_rotation * instance_scale * position);
-
-    let reflected_position = shared_structs::reflect_in_mirror(
-        position,
-        mirror_uniforms.position,
-        mirror_uniforms.normal,
-    );
-
-    let normal = instance_rotation * normal;
-
-    let reflected_normal = shared_structs::reflect(normal, mirror_uniforms.normal);
-
-    *builtin_pos = Mat4::from(uniforms.projection_view) * reflected_position.extend(1.0);
+    *builtin_pos = Mat4::from(uniforms.projection_view)
+        * shared_structs::reflect_in_mirror(
+            position,
+            mirror_uniforms.position,
+            mirror_uniforms.normal,
+        )
+        .extend(1.0);
     builtin_pos.y = -builtin_pos.y;
-    *out_position = reflected_position;
-    *out_normal = reflected_normal;
+    *out_position = position;
+    *out_normal = instance_rotation * normal;
     *out_uv = uv;
 }
 

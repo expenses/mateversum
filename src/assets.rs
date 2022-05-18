@@ -218,17 +218,20 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(albedo_texture) = pbr.base_color_texture() {
-                    upload_model_texture_from_gltf(
-                        &albedo_texture.texture(),
-                        &textures.albedo_texture,
-                        true,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    let pbr = material.pbr_metallic_roughness();
+                    if let Some(albedo_texture) = pbr.base_color_texture() {
+                        upload_model_texture_from_gltf(
+                            &albedo_texture.texture(),
+                            &textures.albedo_texture,
+                            true,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -237,16 +240,19 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                if let Some(normal_texture) = material.normal_texture() {
-                    upload_model_texture_from_gltf(
-                        &normal_texture.texture(),
-                        &textures.normal_texture,
-                        false,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    if let Some(normal_texture) = material.normal_texture() {
+                        upload_model_texture_from_gltf(
+                            &normal_texture.texture(),
+                            &textures.normal_texture,
+                            false,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -255,17 +261,20 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
-                    upload_model_texture_from_gltf(
-                        &metallic_roughness_texture.texture(),
-                        &textures.metallic_roughness_texture,
-                        false,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    let pbr = material.pbr_metallic_roughness();
+                    if let Some(metallic_roughness_texture) = pbr.metallic_roughness_texture() {
+                        upload_model_texture_from_gltf(
+                            &metallic_roughness_texture.texture(),
+                            &textures.metallic_roughness_texture,
+                            false,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });
@@ -274,16 +283,19 @@ impl StagingModelPrimitive {
             let textures = Rc::clone(&textures);
             let context = Rc::clone(&texture_load_context);
             async move {
-                let material = context.gltf.materials().nth(material_index).unwrap();
-                if let Some(emissive_texture) = material.emissive_texture() {
-                    upload_model_texture_from_gltf(
-                        &emissive_texture.texture(),
-                        &textures.emissive_texture,
-                        true,
-                        &context,
-                    )
-                    .await
-                    .unwrap();
+                if let Some(material) = context.gltf.materials().nth(material_index) {
+                    if let Some(emissive_texture) = material.emissive_texture() {
+                        upload_model_texture_from_gltf(
+                            &emissive_texture.texture(),
+                            &textures.emissive_texture,
+                            true,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                } else {
+                    log::warn!("Material index is invalid or model contains no materials.")
                 }
             }
         });

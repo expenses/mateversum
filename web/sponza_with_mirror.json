@@ -1,0 +1,38 @@
+{
+  "models": [
+    {
+      "url": "ipfs://QmQqYLvBEvJphFNRRnrt1aapR6CoEsxEN1D4Z2wQWaTJXA/glTF/Sponza.gltf",
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "url": "mirror/rim.gltf",
+      "position": [
+        0,
+        2.25,
+        -0.75
+      ],
+      "rotation": [
+          0.0,
+          45.0,
+          0.0
+      ]
+    }
+  ],
+  "mirror": {
+    "url": "mirror/mirror_inner.gltf",
+    "position": [
+      0,
+      2.25,
+      -0.75
+    ],
+    "rotation": [
+        0.0,
+        45.0,
+        0.0
+    ]
+  }
+}

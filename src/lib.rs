@@ -71,7 +71,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let request_client = crate::assets::RequestClient::new(cache).map_err(|err| err.to_string())?;
 
-    let mut model_refs: Vec<ModelReference> = serde_json::from_slice(
+    let mut world: World = serde_json::from_slice(
         &request_client
             .fetch_bytes_without_caching(
                 &url::Url::options()
@@ -87,7 +87,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     for (key, value) in href.query_pairs() {
         if key == "model" {
-            model_refs.push(ModelReference {
+            world.models.push(ModelReference {
                 url: url::Url::options()
                     .base_url(Some(&href))
                     .parse(&value)
@@ -263,7 +263,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     });
 
     let mirror_uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("mirorr bind group layout"),
+        label: Some("mirror bind group layout"),
         entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
     });
 
@@ -338,20 +338,13 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let mut model_instances: HashMap<url::Url, Vec<Instance>> = HashMap::new();
 
-    for model_ref in model_refs {
+    for model_ref in world.models {
+        let instance = model_ref.as_instance();
+
         model_instances
             .entry(model_ref.url)
             .or_default()
-            .push(Instance::new(
-                model_ref.position.into(),
-                model_ref.scale,
-                glam::Quat::from_euler(
-                    glam::EulerRot::XYZ,
-                    model_ref.rotation[0].to_radians(),
-                    model_ref.rotation[1].to_radians(),
-                    model_ref.rotation[2].to_radians(),
-                ),
-            ));
+            .push(instance);
     }
 
     for (model_url, instances) in model_instances {
@@ -414,11 +407,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .map_err(|err| err.to_string())?
     };
 
-    let mirror_model = {
-        let url = url::Url::options()
-            .base_url(Some(&href))
-            .parse("mirror/mirror.gltf")
-            .map_err(|err| err.to_string())?;
+    let mirror_model = if let Some(model_ref) = &world.mirror {
+        let url = model_ref.url.clone();
 
         let bytes = context
             .request_client
@@ -430,9 +420,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .await
             .map_err(|err| err.to_string())?;
 
-        let instances = vec![Default::default()];
+        let instances = vec![model_ref.as_instance()];
 
-        InstancedModel {
+        Some(InstancedModel {
             model,
             instance_buffer: ResizingBuffer::new(
                 &device,
@@ -440,7 +430,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 wgpu::BufferUsages::VERTEX,
             ),
             instances,
-        }
+        })
+    } else {
+        None
     };
 
     let setup_fn: js_sys::Function =
@@ -483,6 +475,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     on_message.forget();
 
     let mut player_heads_buffer =
+        ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3, wgpu::BufferUsages::VERTEX);
+    let mut player_heads_mirrored_buffer =
         ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3, wgpu::BufferUsages::VERTEX);
     let mut player_hands_buffer =
         ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3 * 2, wgpu::BufferUsages::VERTEX);
@@ -556,13 +550,19 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         contents: bytemuck::cast_slice(&line_verts),
     });
 
+    let mirror_instance = world
+        .mirror
+        .as_ref()
+        .map(|model| model.as_instance())
+        .unwrap_or_default();
+
     let mirror_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("mirror uniform buffer"),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         contents: bytemuck::bytes_of(
             &shared_structs::MirrorUniforms {
-                position: Vec3::new(0.0, 0.0, -1.0),
-                normal: Vec3::new(0.0, 0.0, -1.0),
+                position: mirror_instance.position,
+                normal: mirror_instance.rotation * Vec3::new(0.0, 0.0, -1.0),
             }
             .as_std140(),
         ),
@@ -616,6 +616,28 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .collect();
 
         player_heads_buffer.write(&device, &queue, bytemuck::cast_slice(&player_heads));
+
+        let player_heads_mirrored: Vec<Instance> = std::iter::once(player_state.clone())
+            .map(|state| {
+                let mut head_transform = state.head;
+
+                head_transform.rotation *= glam::Quat::from_rotation_y(std::f32::consts::PI);
+                head_transform
+            })
+            .chain(
+                player_states
+                    .borrow()
+                    .values()
+                    .cloned()
+                    .map(|state| state.head),
+            )
+            .collect();
+
+        player_heads_mirrored_buffer.write(
+            &device,
+            &queue,
+            bytemuck::cast_slice(&player_heads_mirrored),
+        );
 
         let player_hands: Vec<Instance> = std::iter::once(player_state.clone())
             .chain(player_states.borrow().values().cloned())
@@ -814,9 +836,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .collect::<Vec<_>>();
 
         let mirror_primitives = mirror_model
-            .model
-            .opaque_primitives
             .iter()
+            .flat_map(|model| &model.model.opaque_primitives)
             .map(|primitive| primitive.bind_group.borrow())
             .collect::<Vec<_>>();
 
@@ -858,9 +879,28 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         let uniform_bind_groups = [&left_eye_bind_group, &right_eye_bind_group];
 
-        let mirror_objects = true;
+        let heads = HeadOrHandsRenderingData {
+            instances: &player_heads_buffer.inner,
+            model: &head_model,
+            bind_groups: &head_primitives,
+            num_instances: player_heads.len() as u32,
+        };
 
-        if mirror_objects {
+        let heads_mirrored = HeadOrHandsRenderingData {
+            instances: &player_heads_mirrored_buffer.inner,
+            model: &head_model,
+            bind_groups: &head_primitives,
+            num_instances: player_heads_mirrored.len() as u32,
+        };
+
+        let hands = HeadOrHandsRenderingData {
+            instances: &player_hands_buffer.inner,
+            model: &hand_model,
+            bind_groups: &hand_primitives,
+            num_instances: player_hands.len() as u32,
+        };
+
+        if let Some(mirror_model) = &mirror_model {
             render_pass.set_stencil_reference(1);
 
             {
@@ -882,76 +922,29 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             {
                 render_pass.set_pipeline(&pipelines.pbr_mirrored);
 
-                for (model_index, model) in models.iter().enumerate() {
-                    render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
-
-                    render_primitives(
-                        &mut render_pass,
-                        &model.model.opaque_primitives,
-                        &opaque_model_primitives[model_index],
-                        &viewports,
-                        &uniform_bind_groups,
-                        0..model.instances.len() as u32,
-                    );
-                }
-
-                {
-                    render_pass.set_vertex_buffer(3, player_heads_buffer.inner.slice(..));
-                    render_primitives(
-                        &mut render_pass,
-                        &head_model.opaque_primitives,
-                        &head_primitives,
-                        &viewports,
-                        &uniform_bind_groups,
-                        0..player_heads.len() as u32,
-                    );
-                }
-
-                {
-                    render_pass.set_vertex_buffer(3, player_hands_buffer.inner.slice(..));
-                    render_primitives(
-                        &mut render_pass,
-                        &hand_model.opaque_primitives,
-                        &hand_primitives,
-                        &viewports,
-                        &uniform_bind_groups,
-                        0..player_hands.len() as u32,
-                    );
-                }
+                render_all(
+                    &mut render_pass,
+                    &models,
+                    |model| &model.opaque_primitives,
+                    &opaque_model_primitives,
+                    &viewports,
+                    &uniform_bind_groups,
+                    &heads_mirrored,
+                    &hands,
+                );
 
                 render_pass.set_pipeline(&pipelines.pbr_alpha_clipped_mirrored);
 
-                for (model_index, model) in models.iter().enumerate() {
-                    render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
-
-                    render_primitives(
-                        &mut render_pass,
-                        &model.model.alpha_clipped_primitives,
-                        &alpha_clipped_model_primitives[model_index],
-                        &viewports,
-                        &uniform_bind_groups,
-                        0..model.instances.len() as u32,
-                    );
-                }
-
-                {
-                    render_pass.set_pipeline(&pipelines.line);
-                    render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-
-                    for (i, viewport) in viewports.iter().enumerate() {
-                        render_pass.set_viewport(
-                            viewport.x,
-                            viewport.y,
-                            viewport.width,
-                            viewport.height,
-                            0.0,
-                            1.0,
-                        );
-
-                        render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
-                        render_pass.draw(0..4, 0..1);
-                    }
-                }
+                render_all(
+                    &mut render_pass,
+                    &models,
+                    |model| &model.alpha_clipped_primitives,
+                    &alpha_clipped_model_primitives,
+                    &viewports,
+                    &uniform_bind_groups,
+                    &heads_mirrored,
+                    &hands,
+                );
             }
 
             {
@@ -972,75 +965,47 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         {
             render_pass.set_pipeline(&pipelines.pbr);
 
-            for (model_index, model) in models.iter().enumerate() {
-                render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
-
-                render_primitives(
-                    &mut render_pass,
-                    &model.model.opaque_primitives,
-                    &opaque_model_primitives[model_index],
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..model.instances.len() as u32,
-                );
-            }
-
-            {
-                render_pass.set_vertex_buffer(3, player_heads_buffer.inner.slice(..));
-                render_primitives(
-                    &mut render_pass,
-                    &head_model.opaque_primitives,
-                    &head_primitives,
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..player_heads.len() as u32,
-                );
-            }
-
-            {
-                render_pass.set_vertex_buffer(3, player_hands_buffer.inner.slice(..));
-                render_primitives(
-                    &mut render_pass,
-                    &hand_model.opaque_primitives,
-                    &hand_primitives,
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..player_hands.len() as u32,
-                );
-            }
+            render_all(
+                &mut render_pass,
+                &models,
+                |model| &model.opaque_primitives,
+                &opaque_model_primitives,
+                &viewports,
+                &uniform_bind_groups,
+                &heads,
+                &hands,
+            );
 
             render_pass.set_pipeline(&pipelines.pbr_alpha_clipped);
 
-            for (model_index, model) in models.iter().enumerate() {
-                render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
+            render_all(
+                &mut render_pass,
+                &models,
+                |model| &model.alpha_clipped_primitives,
+                &alpha_clipped_model_primitives,
+                &viewports,
+                &uniform_bind_groups,
+                &heads,
+                &hands,
+            );
+        }
 
-                render_primitives(
-                    &mut render_pass,
-                    &model.model.alpha_clipped_primitives,
-                    &alpha_clipped_model_primitives[model_index],
-                    &viewports,
-                    &uniform_bind_groups,
-                    0..model.instances.len() as u32,
+        {
+            render_pass.set_pipeline(&pipelines.line);
+            render_pass.set_vertex_buffer(0, line_buffer.slice(..));
+
+            for (i, viewport) in viewports.iter().enumerate() {
+                render_pass.set_viewport(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    0.0,
+                    1.0,
                 );
-            }
 
-            {
-                render_pass.set_pipeline(&pipelines.line);
-                render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-
-                for (i, viewport) in viewports.iter().enumerate() {
-                    render_pass.set_viewport(
-                        viewport.x,
-                        viewport.y,
-                        viewport.width,
-                        viewport.height,
-                        0.0,
-                        1.0,
-                    );
-
-                    render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
-                    render_pass.draw(0..4, 0..1);
-                }
+                render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
+                render_pass.draw(0..4, 0..1);
             }
         }
 
@@ -1210,6 +1175,63 @@ fn render_primitives<'a>(
     }
 }
 
+struct HeadOrHandsRenderingData<'a> {
+    instances: &'a wgpu::Buffer,
+    model: &'a assets::Model,
+    bind_groups: &'a [std::cell::Ref<'a, wgpu::BindGroup>],
+    num_instances: u32,
+}
+
+fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    models: &'a [InstancedModel],
+    primitives_getter: F,
+    bind_groups: &'a [Vec<std::cell::Ref<wgpu::BindGroup>>],
+    viewports: &[Viewport],
+    uniform_bind_groups: &[&'a wgpu::BindGroup],
+    heads: &HeadOrHandsRenderingData<'a>,
+    hands: &HeadOrHandsRenderingData<'a>,
+) {
+    for (model_index, model) in models.iter().enumerate() {
+        render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
+
+        render_primitives(
+            render_pass,
+            primitives_getter(&model.model),
+            &bind_groups[model_index],
+            &viewports,
+            &uniform_bind_groups,
+            0..model.instances.len() as u32,
+        );
+    }
+
+    {
+        render_pass.set_vertex_buffer(3, heads.instances.slice(..));
+
+        render_primitives(
+            render_pass,
+            primitives_getter(heads.model),
+            heads.bind_groups,
+            &viewports,
+            &uniform_bind_groups,
+            0..heads.num_instances,
+        );
+    }
+
+    {
+        render_pass.set_vertex_buffer(3, hands.instances.slice(..));
+
+        render_primitives(
+            render_pass,
+            primitives_getter(hands.model),
+            hands.bind_groups,
+            &viewports,
+            &uniform_bind_groups,
+            0..hands.num_instances,
+        );
+    }
+}
+
 struct InstancedModel {
     model: assets::Model,
     instances: Vec<Instance>,
@@ -1217,7 +1239,14 @@ struct InstancedModel {
 }
 
 #[derive(serde::Deserialize)]
+struct World {
+    models: Vec<ModelReference>,
+    mirror: Option<ModelReference>,
+}
+
+#[derive(serde::Deserialize)]
 struct ModelReference {
+    #[serde(deserialize_with = "deserialize_relative_url")]
     url: url::Url,
     #[serde(default)]
     position: [f32; 3],
@@ -1227,8 +1256,44 @@ struct ModelReference {
     scale: f32,
 }
 
+impl ModelReference {
+    fn as_instance(&self) -> Instance {
+        Instance::new(
+            self.position.into(),
+            self.scale,
+            glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                self.rotation[0].to_radians(),
+                self.rotation[1].to_radians(),
+                self.rotation[2].to_radians(),
+            ),
+        )
+    }
+}
+
 const fn one() -> f32 {
     1.0
+}
+
+fn deserialize_relative_url<'de, D>(deserializer: D) -> Result<url::Url, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let relative = String::deserialize(deserializer)?;
+
+    let href = web_sys::window()
+        .unwrap()
+        .location()
+        .href()
+        .map_err(|js_err| serde::de::Error::custom(format!("{:?}", js_err)))?;
+    let href = url::Url::parse(&href).map_err(serde::de::Error::custom)?;
+
+    url::Url::options()
+        .base_url(Some(&href))
+        .parse(&relative)
+        .map_err(serde::de::Error::custom)
 }
 
 struct Pipelines {
