@@ -28,7 +28,7 @@ url = { git = "https://github.com/expenses/rust-url", branch = "set-scheme-unche
 ktx2 = { git = "https://github.com/expenses/ktx2", branch = "expose-more" }
 crevice = { git = "https://github.com/LPGhatguy/crevice", features = ["glam"] }
 wasm-bindgen = { version = "0.2.80", features = ["enable-interning"] }
-wasm-webxr-helpers = { path = "../wasm-webxr-helpers" }
+wasm-webxr-helpers = { git = "https://github.com/expenses/wasm-webxr-helpers" }
 basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-wasm" }
 elsa = "1.7.0"
 anyhow = "1.0.57"
