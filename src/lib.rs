@@ -585,10 +585,96 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }],
     });
 
+    let movement = Rc::new(RefCell::new(None));
+
+    let on_select_start_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
+        let reference_space = reference_space.clone();
+        let movement = Rc::clone(&movement);
+
+        move |event: web_sys::XrInputSourceEvent| {
+            let frame = event.frame();
+            let input_source = event.input_source();
+
+            let target_ray_mode = input_source.target_ray_mode();
+
+            if target_ray_mode == web_sys::XrTargetRayMode::Screen {
+                if let Some(grip_pose) =
+                    frame.get_pose(&input_source.target_ray_space(), &reference_space)
+                {
+                    let transform = grip_pose.transform();
+                    // Where a tap occurred, and the rotation
+                    let instance = Instance::from_transform(transform, 1.0);
+                    let tap_direction = instance.rotation * Vec3::Z;
+
+                    log::info!("Starting {:?}", tap_direction);
+
+                    *movement.borrow_mut() = Some(tap_direction);
+                }
+            }
+        }
+    })
+        as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
+
+    let on_select_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
+        let _reference_space = reference_space.clone();
+        let movement = Rc::clone(&movement);
+
+        move |_event: web_sys::XrInputSourceEvent| {
+            *movement.borrow_mut() = None;
+
+            /*
+            let frame = event.frame();
+            let input_source = event.input_source();
+
+            let target_ray_mode = input_source.target_ray_mode();
+
+            if target_ray_mode == web_sys::XrTargetRayMode::Screen {
+                if let Some(grip_pose) =
+                    frame.get_pose(&input_source.target_ray_space(), &reference_space)
+                {
+                    let transform = grip_pose.transform();
+                    // Where a tap occurred, and the rotation
+                    let instance = Instance::from_transform(transform, 1.0);
+                    let tap_direction = instance.rotation * Vec3::Z;
+
+                    log::info!("Ending {:?}", tap_direction);
+                }
+            }
+            */
+        }
+    })
+        as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
+
+    xr_session.set_onselectstart(Some(on_select_start_closure.as_ref().unchecked_ref()));
+
+    xr_session.set_onselect(Some(on_select_closure.as_ref().unchecked_ref()));
+
+    on_select_closure.forget();
+    on_select_start_closure.forget();
+
     let framebuffer_cache = ResourceCache::default();
     let bind_group_cache = ResourceCache::default();
 
+    let mut offset = Vec3::ZERO;
+
     wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |_time, frame| {
+        let movement = movement.borrow();
+
+        if let Some(movement) = movement.as_ref() {
+            offset += *movement * 2.0 / 60.0;
+        }
+
+        let mut js_offset = web_sys::DomPointInit::new();
+
+        js_offset
+            .x(offset.x as f64)
+            .y(offset.y as f64)
+            .z(offset.z as f64);
+
+        let reference_space = reference_space.get_offset_reference_space(
+            &web_sys::XrRigidTransform::new_with_position(&js_offset).unwrap(),
+        );
+
         let models = models.borrow();
 
         let xr_session: web_sys::XrSession = frame.session();
