@@ -579,7 +579,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }],
     });
 
-    let mut movement = Rc::new(RefCell::new(None));
+    let movement = Rc::new(RefCell::new(None));
 
     let on_select_start_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
         let reference_space = reference_space.clone();
@@ -610,7 +610,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
 
     let on_select_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
-        let reference_space = reference_space.clone();
+        let _reference_space = reference_space.clone();
         let movement = Rc::clone(&movement);
 
         move |_event: web_sys::XrInputSourceEvent| {
@@ -639,17 +639,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     })
         as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
 
-    let on_select_start_fn: &js_sys::Function = on_select_start_closure.as_ref().unchecked_ref();
+    xr_session.set_onselectstart(Some(on_select_start_closure.as_ref().unchecked_ref()));
 
-    xr_session.set_onselectstart(Some(&on_select_start_fn));
-
-    on_select_start_closure.forget();
-
-    let on_select_fn: &js_sys::Function = on_select_closure.as_ref().unchecked_ref();
-
-    xr_session.set_onselect(Some(&on_select_fn));
+    xr_session.set_onselect(Some(on_select_closure.as_ref().unchecked_ref()));
 
     on_select_closure.forget();
+    on_select_start_closure.forget();
 
     let mut offset = Vec3::ZERO;
 
