@@ -807,8 +807,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             })
         });
 
-        // We have to make this new every frame because clearing it doesn't seem to work. Great.
-        let depth = {
+        let depth = framebuffer_cache.get("depth", || {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some("depth"),
@@ -824,7 +823,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 })
                 .create_view(&Default::default())
-        };
+        });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
