@@ -96,6 +96,7 @@ features = [
   'Cache',
   'ResponseInit',
   'HtmlBrElement',
+  'DomPointInit',
 ]
 
 [patch.crates-io]
