@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 console_error_panic_hook = "0.1.7"
 console_log = "0.2.0"
 wasm-web-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
-log = "0.4.16"
+log = "0.4.17"
 wasm-bindgen-futures = "0.4.30"
 wgpu = { version = "0.12.0", features = ["webgl", "spirv"] }
 futures = { version = "0.3.21", default-features = false }
@@ -18,10 +18,10 @@ gltf = { version = "1.0.0", features = ["KHR_materials_unlit"], default-features
 gltf-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 glam = "0.20.5"
 bytemuck = { version = "1.9.1", features = ["derive"] }
-image = { version = "0.24.1", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.24.2", default-features = false, features = ["jpeg", "png"] }
 shared-structs = { path = "shared-structs" }
 glow = "0.11.2"
-wgpu-hal = "0.12.0"
+wgpu-hal = "0.12"
 base64 = "0.13.0"
 js-sys = "0.3.57"
 url = { git = "https://github.com/expenses/rust-url", branch = "set-scheme-unchecked", features = ["serde"] }
@@ -33,13 +33,13 @@ basis-universal-wasm = { git = "https://github.com/expenses/basis-universal-rs-w
 elsa = "1.7.0"
 anyhow = "1.0.57"
 basis-universal = { git = "https://github.com/expenses/basis-universal-rs" }
-zstd = { version = "0.11.1", default-features = false, features = ["wasm"] }
+zstd = { version = "0.11.2", default-features = false, features = ["wasm"] }
 wasm-futures-executor = { git = "https://github.com/expenses/wasm-futures-executor", branch = "unbounded" }
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 
 [dependencies.web-sys]
-version = "0.3.36"
+version = "0.3.57"
 features = [
   'Document',
   'Element',
@@ -100,10 +100,10 @@ features = [
 ]
 
 [patch.crates-io]
-web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
-wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
-wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
-js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
+web-sys = { git = "https://github.com/rustwasm/wasm-bindgen" }
+wasm-bindgen = { git = "https://github.com/rustwasm/wasm-bindgen" }
+wasm-bindgen-shared = { git = "https://github.com/rustwasm/wasm-bindgen" }
+js-sys = { git = "https://github.com/rustwasm/wasm-bindgen" }
 glow = { git = "https://github.com/expenses/glow", branch = "webxr" }
 wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }

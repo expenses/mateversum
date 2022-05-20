@@ -792,7 +792,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
-        let framebuffer = base_layer.framebuffer();
+        let framebuffer = js_sys::Reflect::get(&base_layer, &"framebuffer".into()).unwrap().into();
 
         let texture = unsafe {
             device.create_texture_from_hal::<wgpu_hal::gles::Api>(

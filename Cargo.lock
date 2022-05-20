@@ -696,7 +696,7 @@ checksum = "9478aa10f73e7528198d75109c8be5cd7d15fb530238040148d5f9a22d4c5b3b"
 [[package]]
 name = "js-sys"
 version = "0.3.57"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 dependencies = [
  "wasm-bindgen",
 ]
@@ -1091,18 +1091,18 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.5.5"
+version = "1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a11647b6b25ff05a515cb92c365cec08801e83423a235b51e231e1808747286"
+checksum = "d83f127d94bdbcda4c8cc2e50f6f84f4b611f69c902699ca385a39c3a75f9ff1"
 dependencies = [
  "regex-syntax",
 ]
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.25"
+version = "0.6.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
+checksum = "49b3de9ec5dc0a3417da371aab17d729997c15010e7fd24ff707773a33bddb64"
 
 [[package]]
 name = "renderdoc-sys"
@@ -1513,7 +1513,7 @@ checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
 [[package]]
 name = "wasm-bindgen"
 version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 dependencies = [
  "cfg-if",
  "serde",
@@ -1524,7 +1524,7 @@ dependencies = [
 [[package]]
 name = "wasm-bindgen-backend"
 version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 dependencies = [
  "bumpalo",
  "lazy_static",
@@ -1550,7 +1550,7 @@ dependencies = [
 [[package]]
 name = "wasm-bindgen-macro"
 version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -1559,7 +1559,7 @@ dependencies = [
 [[package]]
 name = "wasm-bindgen-macro-support"
 version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1571,7 +1571,7 @@ dependencies = [
 [[package]]
 name = "wasm-bindgen-shared"
 version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 
 [[package]]
 name = "wasm-futures-executor"
@@ -1611,7 +1611,7 @@ dependencies = [
 [[package]]
 name = "web-sys"
 version = "0.3.57"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=webxr-fixes#6bdd1ce9e3a68e2e137ad4b1825d5fca9c0f8e58"
+source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a716501ecc299218"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
