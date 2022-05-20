@@ -249,6 +249,17 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         },
     };
 
+    let texture_array_entry = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        count: None,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+    };
+
     let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -288,7 +299,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let tonemap_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("mirror bind group layout"),
-        entries: &[sampler_entry(0), texture_entry(1)],
+        entries: &[sampler_entry(0), texture_array_entry(1)],
     });
 
     let shader_cache = Rc::new(ResourceCache::default());
@@ -489,42 +500,20 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let mut player_hands_buffer =
         ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3 * 2, wgpu::BufferUsages::VERTEX);
 
-    let left_eye_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("left eye uniform buffer"),
+    let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("uniform buffer"),
         size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         mapped_at_creation: false,
     });
 
-    let right_eye_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("right eye uniform buffer"),
-        size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
-        mapped_at_creation: false,
-    });
-
-    let left_eye_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("left eye bind group"),
+    let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("uniform bind group"),
         layout: &uniform_bgl,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: left_eye_uniform_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&linear_sampler),
-            },
-        ],
-    });
-
-    let right_eye_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("right eye bind group"),
-        layout: &uniform_bgl,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: right_eye_uniform_buffer.as_entire_binding(),
+                resource: uniform_buffer.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -745,20 +734,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         let views: Vec<web_sys::XrView> = pose.views().iter().map(|view| view.into()).collect();
 
-        let viewports: Vec<_> = views
-            .iter()
-            .map(|view| {
-                let viewport = xr_gl_layer.get_viewport(view).unwrap();
-
-                Viewport {
-                    x: viewport.x() as f32,
-                    y: viewport.y() as f32,
-                    width: viewport.width() as f32,
-                    height: viewport.height() as f32,
-                }
-            })
-            .collect();
-
         let base_layer = xr_session.render_state().base_layer().unwrap();
 
         {
@@ -767,16 +742,34 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             let left_proj = parse_matrix(views[0].projection_matrix());
             let left_inv = parse_matrix(views[0].transform().inverse().matrix());
 
+            let left_projection_view = (left_proj * left_inv).into();
+            let left_eye_position = {
+                let p = views[0].transform().position();
+                glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
+            };
+
+            let (right_projection_view, right_eye_position) = if let Some(right_view) = views.get(1)
+            {
+                let right_inv = parse_matrix(right_view.transform().inverse().matrix());
+                let right_proj = parse_matrix(right_view.projection_matrix());
+
+                ((right_proj * right_inv).into(), {
+                    let p = right_view.transform().position();
+                    glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
+                })
+            } else {
+                Default::default()
+            };
+
             queue.write_buffer(
-                &left_eye_uniform_buffer,
+                &uniform_buffer,
                 0,
                 bytemuck::bytes_of(
                     &shared_structs::Uniforms {
-                        projection_view: { left_proj * left_inv }.into(),
-                        eye_position: {
-                            let p = views[0].transform().position();
-                            glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                        },
+                        left_projection_view,
+                        right_projection_view,
+                        left_eye_position,
+                        right_eye_position,
                     }
                     .as_std140(),
                 ),
@@ -796,26 +789,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     .unwrap();
             }
 
-            if let Some(right_view) = views.get(1) {
-                let right_inv = parse_matrix(right_view.transform().inverse().matrix());
-                let right_proj = parse_matrix(right_view.projection_matrix());
-
-                queue.write_buffer(
-                    &right_eye_uniform_buffer,
-                    0,
-                    bytemuck::bytes_of(
-                        &shared_structs::Uniforms {
-                            projection_view: { right_proj * right_inv }.into(),
-                            eye_position: {
-                                let p = right_view.transform().position();
-                                glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                            },
-                        }
-                        .as_std140(),
-                    ),
-                );
-            }
-
             queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
@@ -824,9 +797,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let texture = unsafe {
             device.create_texture_from_hal::<wgpu_hal::gles::Api>(
                 wgpu_hal::gles::Texture {
-                    inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer {
-                        inner: framebuffer.clone(),
-                    },
+                    inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
                     mip_level_count: 1,
                     array_layer_count: 1,
                     format: wgpu::TextureFormat::Rgba8Unorm,
@@ -862,9 +833,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some("hdr framebuffer"),
                     size: wgpu::Extent3d {
-                        width: base_layer.framebuffer_width(),
+                        width: base_layer.framebuffer_width() / 2,
                         height: base_layer.framebuffer_height(),
-                        depth_or_array_layers: 1,
+                        depth_or_array_layers: 2,
                     },
                     mip_level_count: 1,
                     sample_count: 1,
@@ -873,7 +844,10 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING
                         | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 })
-                .create_view(&Default::default())
+                .create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..Default::default()
+                })
         });
 
         let tonemap_bind_group = bind_group_cache.get("tonemap bind group", || {
@@ -898,9 +872,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some("depth"),
                     size: wgpu::Extent3d {
-                        width: base_layer.framebuffer_width(),
+                        width: base_layer.framebuffer_width() / 2,
                         height: base_layer.framebuffer_height(),
-                        depth_or_array_layers: 1,
+                        depth_or_array_layers: 2,
                     },
                     mip_level_count: 1,
                     sample_count: 1,
@@ -908,7 +882,10 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     format: wgpu::TextureFormat::Depth24PlusStencil8,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 })
-                .create_view(&Default::default())
+                .create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..Default::default()
+                })
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1016,8 +993,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             }),
         });
 
-        let uniform_bind_groups = [&left_eye_bind_group, &right_eye_bind_group];
-
         let heads = HeadOrHandsRenderingData {
             instances: &player_heads_buffer.inner,
             model: &head_model,
@@ -1039,6 +1014,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             num_instances: player_hands.len() as u32,
         };
 
+        render_pass.set_bind_group(0, &uniform_bind_group, &[]);
+
         if let Some(mirror_model) = &mirror_model {
             render_pass.set_stencil_reference(1);
 
@@ -1050,8 +1027,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &mut render_pass,
                     &mirror_model.model.opaque_primitives,
                     &mirror_primitives,
-                    &viewports,
-                    &uniform_bind_groups,
                     0..1,
                 );
             }
@@ -1066,8 +1041,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     |model| &model.opaque_primitives,
                     &model_bind_groups.pbr_opaque,
-                    &viewports,
-                    &uniform_bind_groups,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1079,8 +1052,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     |model| &model.unlit_opaque_primitives,
                     &model_bind_groups.unlit_opaque,
-                    &viewports,
-                    &uniform_bind_groups,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1092,8 +1063,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     |model| &model.alpha_clipped_primitives,
                     &model_bind_groups.pbr_alpha_clipped,
-                    &viewports,
-                    &uniform_bind_groups,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1105,8 +1074,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     |model| &model.unlit_alpha_clipped_primitives,
                     &model_bind_groups.unlit_alpha_clipped,
-                    &viewports,
-                    &uniform_bind_groups,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1120,8 +1087,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &mut render_pass,
                     &mirror_model.model.opaque_primitives,
                     &mirror_primitives,
-                    &viewports,
-                    &uniform_bind_groups,
                     0..1,
                 );
             }
@@ -1135,8 +1100,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 |model| &model.opaque_primitives,
                 &model_bind_groups.pbr_opaque,
-                &viewports,
-                &uniform_bind_groups,
                 &heads,
                 &hands,
             );
@@ -1148,8 +1111,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 |model| &model.unlit_opaque_primitives,
                 &model_bind_groups.unlit_opaque,
-                &viewports,
-                &uniform_bind_groups,
                 &heads,
                 &hands,
             );
@@ -1161,8 +1122,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 |model| &model.alpha_clipped_primitives,
                 &model_bind_groups.pbr_alpha_clipped,
-                &viewports,
-                &uniform_bind_groups,
                 &heads,
                 &hands,
             );
@@ -1174,8 +1133,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 |model| &model.unlit_alpha_clipped_primitives,
                 &model_bind_groups.unlit_alpha_clipped,
-                &viewports,
-                &uniform_bind_groups,
                 &heads,
                 &hands,
             );
@@ -1184,20 +1141,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         {
             render_pass.set_pipeline(&pipelines.line);
             render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-
-            for (i, viewport) in viewports.iter().enumerate() {
-                render_pass.set_viewport(
-                    viewport.x,
-                    viewport.y,
-                    viewport.width,
-                    viewport.height,
-                    0.0,
-                    1.0,
-                );
-
-                render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
-                render_pass.draw(0..4, 0..1);
-            }
+            render_pass.draw(0..4, 0..1);
         }
 
         drop(render_pass);
@@ -1353,19 +1297,10 @@ struct PlayerState {
     hands: [Instance; 2],
 }
 
-struct Viewport {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
 fn render_primitives<'a>(
     render_pass: &mut wgpu::RenderPass<'a>,
     primitives: &'a [ModelPrimitive],
     bind_groups: &'a [std::cell::Ref<wgpu::BindGroup>],
-    viewports: &[Viewport],
-    uniform_bind_groups: &[&'a wgpu::BindGroup],
     instance_range: std::ops::Range<u32>,
 ) {
     for (primitive_index, primitive) in primitives.iter().enumerate() {
@@ -1375,20 +1310,7 @@ fn render_primitives<'a>(
         render_pass.set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
 
         render_pass.set_bind_group(1, &bind_groups[primitive_index], &[]);
-
-        for (i, viewport) in viewports.iter().enumerate() {
-            render_pass.set_viewport(
-                viewport.x,
-                viewport.y,
-                viewport.width,
-                viewport.height,
-                0.0,
-                1.0,
-            );
-
-            render_pass.set_bind_group(0, uniform_bind_groups[i], &[]);
-            render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
-        }
+        render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
     }
 }
 
@@ -1411,8 +1333,6 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
     models: &'a [InstancedModel],
     primitives_getter: F,
     bind_groups: &'a [Vec<std::cell::Ref<wgpu::BindGroup>>],
-    viewports: &[Viewport],
-    uniform_bind_groups: &[&'a wgpu::BindGroup],
     heads: &HeadOrHandsRenderingData<'a>,
     hands: &HeadOrHandsRenderingData<'a>,
 ) {
@@ -1423,37 +1343,27 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
             render_pass,
             primitives_getter(&model.model),
             &bind_groups[model_index],
-            viewports,
-            uniform_bind_groups,
             0..model.instances.len() as u32,
         );
     }
 
-    {
-        render_pass.set_vertex_buffer(3, heads.instances.slice(..));
+    render_pass.set_vertex_buffer(3, heads.instances.slice(..));
 
-        render_primitives(
-            render_pass,
-            primitives_getter(heads.model),
-            heads.bind_groups,
-            viewports,
-            uniform_bind_groups,
-            0..heads.num_instances,
-        );
-    }
+    render_primitives(
+        render_pass,
+        primitives_getter(heads.model),
+        heads.bind_groups,
+        0..heads.num_instances,
+    );
 
-    {
-        render_pass.set_vertex_buffer(3, hands.instances.slice(..));
+    render_pass.set_vertex_buffer(3, hands.instances.slice(..));
 
-        render_primitives(
-            render_pass,
-            primitives_getter(hands.model),
-            hands.bind_groups,
-            viewports,
-            uniform_bind_groups,
-            0..hands.num_instances,
-        );
-    }
+    render_primitives(
+        render_pass,
+        primitives_getter(hands.model),
+        hands.bind_groups,
+        0..hands.num_instances,
+    );
 }
 
 struct InstancedModel {
@@ -1577,6 +1487,8 @@ impl PipelineSet {
             ..Default::default()
         };
 
+        let multiview = Some(std::num::NonZeroU32::new(2).unwrap());
+
         Self {
             opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
@@ -1586,7 +1498,7 @@ impl PipelineSet {
                 primitive: normal_primitive_state,
                 depth_stencil: Some(normal_depth_state.clone()),
                 multisample: Default::default(),
-                multiview: Default::default(),
+                multiview,
             }),
             alpha_clipped: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
@@ -1596,7 +1508,7 @@ impl PipelineSet {
                 primitive: normal_primitive_state,
                 depth_stencil: Some(normal_depth_state),
                 multisample: Default::default(),
-                multiview: Default::default(),
+                multiview,
             }),
             opaque_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
@@ -1606,7 +1518,7 @@ impl PipelineSet {
                 primitive: mirrored_primitive_state,
                 depth_stencil: Some(stencil_test_depth_state.clone()),
                 multisample: Default::default(),
-                multiview: Default::default(),
+                multiview,
             }),
             alpha_clipped_mirrored: device.create_render_pipeline(
                 &wgpu::RenderPipelineDescriptor {
@@ -1617,7 +1529,7 @@ impl PipelineSet {
                     primitive: mirrored_primitive_state,
                     depth_stencil: Some(stencil_test_depth_state),
                     multisample: Default::default(),
-                    multiview: Default::default(),
+                    multiview,
                 },
             ),
         }
@@ -1648,6 +1560,8 @@ impl Pipelines {
                 bind_group_layouts: &[uniform_bgl, model_bgl],
                 push_constant_ranges: &[],
             });
+
+        let multiview = Some(std::num::NonZeroU32::new(2).unwrap());
 
         let vertex_buffers = &[
             wgpu::VertexBufferLayout {
@@ -1731,7 +1645,7 @@ impl Pipelines {
             },
             depth_stencil: Some(normal_depth_state.clone()),
             multisample: Default::default(),
-            multiview: Default::default(),
+            multiview,
         });
 
         let tonemap_pipeline_layout =
@@ -1808,7 +1722,7 @@ impl Pipelines {
                     },
                 }),
                 multisample: Default::default(),
-                multiview: Default::default(),
+                multiview,
             });
 
         let set_depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1832,7 +1746,7 @@ impl Pipelines {
             primitive: normal_primitive_state,
             depth_stencil: Some(normal_depth_state),
             multisample: Default::default(),
-            multiview: Default::default(),
+            multiview,
         });
 
         let mirrored_pipeline_layout =

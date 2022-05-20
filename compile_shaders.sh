@@ -1,5 +1,5 @@
 cd rust-gpu-cli-builder
-cargo run --release -- ../shaders --multimodule --output ../compiled-shaders
+cargo run --release -- ../shaders --multimodule --output ../compiled-shaders --capabilities MultiView --extensions SPV_KHR_multiview
 cd ..
 for file in compiled-shaders/*.spv; do
     path=$(realpath $file)

@@ -7,7 +7,7 @@
 
 use shared_structs::{MaterialSettings, MirrorUniforms, Uniforms};
 use spirv_std::{
-    glam::{self, Mat3, Mat4, Vec2, Vec3, Vec4},
+    glam::{self, Mat3, Vec2, Vec3, Vec4},
     num_traits::Float,
     Image, Sampler,
 };
@@ -23,6 +23,7 @@ pub fn vertex(
     instance_rotation: glam::Quat,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
+    #[spirv(view_index)] view_index: i32,
     out_position: &mut Vec3,
     out_normal: &mut Vec3,
     out_uv: &mut Vec2,
@@ -31,7 +32,7 @@ pub fn vertex(
     let instance_translation = instance_translation_and_scale.truncate();
 
     let position = instance_translation + (instance_rotation * instance_scale * position);
-    *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
+    *builtin_pos = uniforms.projection_view(view_index) * position.extend(1.0);
     *out_position = position;
     *out_normal = instance_rotation * normal;
     *out_uv = uv;
@@ -108,6 +109,7 @@ pub fn fragment(
     #[spirv(descriptor_set = 1, binding = 6)] normal_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    #[spirv(view_index)] view_index: i32,
     output: &mut Vec4,
 ) {
     let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
@@ -126,7 +128,7 @@ pub fn fragment(
         &material_settings,
     );
 
-    let view_vector = (uniforms.eye_position - position).normalize();
+    let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
 
@@ -159,6 +161,7 @@ pub fn fragment_alpha_clipped(
     #[spirv(descriptor_set = 1, binding = 6)] normal_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    #[spirv(view_index)] view_index: i32,
     output: &mut Vec4,
 ) {
     let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
@@ -177,7 +180,7 @@ pub fn fragment_alpha_clipped(
         &material_settings,
     );
 
-    let view_vector = (uniforms.eye_position - position).normalize();
+    let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
 
@@ -343,9 +346,10 @@ pub fn line_vertex(
     colour: Vec3,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
+    #[spirv(view_index)] view_index: i32,
     out_colour: &mut Vec3,
 ) {
-    *builtin_pos = Mat4::from(uniforms.projection_view) * position.extend(1.0);
+    *builtin_pos = uniforms.projection_view(view_index) * position.extend(1.0);
     *out_colour = colour;
 }
 
@@ -364,6 +368,7 @@ pub fn vertex_mirrored(
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
+    #[spirv(view_index)] view_index: i32,
     out_position: &mut Vec3,
     out_normal: &mut Vec3,
     out_uv: &mut Vec2,
@@ -372,7 +377,7 @@ pub fn vertex_mirrored(
     let instance_translation = instance_translation_and_scale.truncate();
 
     let position = instance_translation + (instance_rotation * instance_scale * position);
-    *builtin_pos = Mat4::from(uniforms.projection_view)
+    *builtin_pos = uniforms.projection_view(view_index)
         * shared_structs::reflect_in_mirror(
             position,
             mirror_uniforms.position,
@@ -408,10 +413,16 @@ fn aces_filmic(x: Vec3) -> Vec3 {
 pub fn tonemap(
     uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
-    #[spirv(descriptor_set = 0, binding = 1)] texture: &Image!(2D, type=f32, sampled),
+    #[spirv(descriptor_set = 0, binding = 1)] texture: &Image!(2D, type=f32, sampled, arrayed),
     output: &mut Vec4,
 ) {
-    let sample: Vec4 = texture.sample(*sampler, uv);
+    let (array_index, uv) = if uv.x > 0.5 {
+        (1, Vec2::new(uv.x * 2.0 - 1.0, uv.y))
+    } else {
+        (0, Vec2::new(uv.x * 2.0, uv.y))
+    };
+
+    let sample: Vec4 = texture.sample(*sampler, uv.extend(array_index as f32));
 
     let linear = aces_filmic(sample.truncate());
 

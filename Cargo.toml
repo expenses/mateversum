@@ -104,9 +104,12 @@ web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fi
 wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
 js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "webxr-fixes" }
-glow = { git = "https://github.com/expenses/glow", branch = "web-sys-bind-raw-framebuffer" }
-wgpu = { path = "../../wgpu/wgpu" }
-wgpu-hal = { path = "../../wgpu/wgpu-hal" }
+glow = { git = "https://github.com/expenses/glow", branch = "webxr" }
+wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
+wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
+
+[patch.'https://github.com/gfx-rs/naga']
+naga = { git = "https://github.com/expenses/naga", branch = "webxr" }
 
 [workspace]
 members = [
