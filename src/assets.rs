@@ -1121,14 +1121,6 @@ impl RequestClient {
         let request_init = construct_request_init(byte_range.clone())?;
 
         let mut cache_url = url.clone();
-
-        if let Some(byte_range) = byte_range.clone() {
-            cache_url.query_pairs_mut().append_pair(
-                "bytes",
-                &format!("{}-{}", byte_range.start, byte_range.end - 1),
-            );
-        }
-
         let mut fetch_url = url.clone();
 
         if url.scheme() == "ipfs" {
@@ -1136,7 +1128,6 @@ impl RequestClient {
 
             let host_err = || anyhow::anyhow!("Failed to get url host");
             let path_segments_err = || anyhow::anyhow!("Failed to get url path segments");
-            let scheme_err = || anyhow::anyhow!("Failed to set scheme");
 
             fetch_url
                 .path_segments_mut()
@@ -1150,22 +1141,24 @@ impl RequestClient {
             // As a result, we need to rewrite the url to:
             // http://ipfs/<CID>/<PATH>
 
-            cache_url
-                .set_scheme_unchecked("http")
-                .map_err(|_| scheme_err())?;
+            cache_url = url::Url::parse("http://ipfs").unwrap();
 
             // Append the host_str (the CID in this case) to the path.
-            let new_path: Vec<_> = std::iter::once(cache_url.host_str().ok_or_else(host_err)?)
-                .chain(cache_url.path_segments().into_iter().flatten())
+            let new_path: Vec<_> = std::iter::once(url.host_str().ok_or_else(host_err)?)
+                .chain(url.path_segments().into_iter().flatten())
                 .map(|string| string.to_owned())
                 .collect();
             cache_url
                 .path_segments_mut()
                 .map_err(|_| path_segments_err())?
-                .clear()
                 .extend(new_path);
+        }
 
-            cache_url.set_host(Some("ipfs"))?;
+        if let Some(byte_range) = byte_range.clone() {
+            cache_url.query_pairs_mut().append_pair(
+                "bytes",
+                &format!("{}-{}", byte_range.start, byte_range.end - 1),
+            );
         }
 
         let cache_request =
