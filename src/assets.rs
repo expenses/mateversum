@@ -598,6 +598,13 @@ impl<'a> ImageSource<'a> {
             Self::Bytes(bytes) => Cow::Borrowed(bytes),
         })
     }
+
+    fn extension(&self) -> Option<&str> {
+        match &self {
+            ImageSource::Url(url) => Some(url.path_segments()?.last()?.rsplit_once('.')?.1),
+            ImageSource::Bytes(_) => None,
+        }
+    }
 }
 
 async fn load_image_from_mime_type(
@@ -607,36 +614,41 @@ async fn load_image_from_mime_type(
     mime_type: Option<&str>,
     binding: &MaterialTexture,
 ) -> anyhow::Result<Rc<Texture>> {
-    Ok(if mime_type == Some("image/ktx2") {
-        match source {
-            ImageSource::Bytes(bytes) => Rc::new(load_ktx2_sync(
+    match (mime_type, source.extension()) {
+        (Some("image/ktx2"), _) | (_, Some("ktx2")) => match source {
+            ImageSource::Bytes(bytes) => Ok(Rc::new(load_ktx2_sync(
                 &context.context.device,
                 &context.context.queue,
                 srgb,
                 context.context.compressed_texture_format,
                 bytes,
-            )),
-            ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await?,
+            ))),
+            ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await,
+        },
+        (Some("image/x.basis"), _) | (_, Some("basis")) => {
+            log::error!("Loading .basis files is deprecated!");
+
+            Ok(Rc::new(load_basis(
+                &context.context.device,
+                &context.context.queue,
+                context.context.compressed_texture_format,
+                &source.get_bytes(&context.context.request_client).await?,
+                srgb,
+            )))
         }
-    } else if mime_type == Some("image/x.basis") {
-        log::error!("Loading .basis files is deprecated!");
+        _ => {
+            log::error!(
+                "{:?}: Loading standard jpg/pngs is deprecated!",
+                context.base_url
+            );
 
-        Rc::new(load_basis(
-            &context.context.device,
-            &context.context.queue,
-            context.context.compressed_texture_format,
-            &source.get_bytes(&context.context.request_client).await?,
-            srgb,
-        ))
-    } else {
-        log::error!("Loading standard jpg/pngs is deprecated!");
-
-        Rc::new(load_standard_image_format(
-            &context.context,
-            &source.get_bytes(&context.context.request_client).await?,
-            srgb,
-        ))
-    })
+            Ok(Rc::new(load_standard_image_format(
+                &context.context,
+                &source.get_bytes(&context.context.request_client).await?,
+                srgb,
+            )))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
