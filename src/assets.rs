@@ -749,9 +749,14 @@ async fn load_ktx2_async(
         .await?
         .copy_to(&mut header_bytes);
 
-    let header = ktx2::Header::from_bytes(&header_bytes);
+    let header = ktx2::Header::from_bytes(&header_bytes)?;
 
-    header.validate()?;
+    if let Some(format) = header.format {
+        return Err(anyhow::anyhow!(
+            "Expected a UASTC texture, got {:?}",
+            format
+        ));
+    }
 
     let down_scaling_level = context
         .context
@@ -940,8 +945,8 @@ async fn decompress_and_transcode(
         .fetch_bytes(
             url,
             Some(
-                level_index.offset as usize
-                    ..(level_index.offset + level_index.length_bytes) as usize,
+                level_index.byte_offset as usize
+                    ..(level_index.byte_offset + level_index.byte_length) as usize,
             ),
         )
         .await?;
@@ -950,7 +955,7 @@ async fn decompress_and_transcode(
         .spawn(async move {
             let decompressed = match header.supercompression_scheme {
                 Some(ktx2::SupercompressionScheme::Zstandard) => {
-                    zstd::bulk::decompress(&bytes, level_index.uncompressed_length_bytes as usize)?
+                    zstd::bulk::decompress(&bytes, level_index.uncompressed_byte_length as usize)?
                 }
                 Some(other) => panic!("Unsupported: {:?}", other),
                 None => bytes,
