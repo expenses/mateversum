@@ -318,7 +318,7 @@ pub(super) fn load_ktx2_sync(
         let decompressed = match header.supercompression_scheme {
             Some(ktx2::SupercompressionScheme::Zstandard) => {
                 let decompressed =
-                    zstd::bulk::decompress(level.bytes, level.uncompressed_length_bytes as usize)
+                    zstd::bulk::decompress(level.bytes, level.uncompressed_byte_length as usize)
                         .unwrap();
                 std::borrow::Cow::Owned(decompressed)
             }

@@ -21,7 +21,7 @@ bytemuck = { version = "1.9.1", features = ["derive"] }
 image = { version = "0.24.2", default-features = false, features = ["jpeg", "png"] }
 shared-structs = { path = "shared-structs" }
 glow = "0.11.2"
-wgpu-hal = "0.12"
+wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
 base64 = "0.13.0"
 js-sys = "0.3.57"
 url = { version = "2.2.2", features = ["serde"] }
