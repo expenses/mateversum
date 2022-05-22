@@ -23,6 +23,9 @@
 
             const ipfs = await IPFS.create();
 
+            window.ipfs = ipfs;
+            console.log("added ipfs");
+
             for await (chunk of ipfs.cat('QmQqYLvBEvJphFNRRnrt1aapR6CoEsxEN1D4Z2wQWaTJXA/glTF/Sponza.bin')) {
                 console.log(chunk);
             }

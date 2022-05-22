@@ -341,6 +341,7 @@ pub(crate) struct Model {
     pub(crate) opaque_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
     pub(crate) unlit_opaque_primitives: Vec<ModelPrimitive>,
+    pub(crate) unlit_alpha_clipped_primitives: Vec<ModelPrimitive>,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -385,6 +386,7 @@ pub(crate) async fn load_gltf_from_bytes(
     let mut opaque_primitives = std::collections::HashMap::new();
     let mut alpha_clipped_primitives = std::collections::HashMap::new();
     let mut unlit_opaque_primitives = std::collections::HashMap::new();
+    let mut unlit_alpha_clipped_primitives = std::collections::HashMap::new();
 
     for (node, mesh) in gltf
         .nodes()
@@ -398,8 +400,8 @@ pub(crate) async fn load_gltf_from_bytes(
             let primitive_map = match (material.alpha_mode(), material.unlit()) {
                 (gltf::material::AlphaMode::Opaque, false) => &mut opaque_primitives,
                 (_, false) => &mut alpha_clipped_primitives,
-                // todo: Handle alpha clipped unlit materials.
-                (_, true) => &mut unlit_opaque_primitives,
+                (gltf::material::AlphaMode::Opaque, true) => &mut unlit_opaque_primitives,
+                (_, true) => &mut unlit_alpha_clipped_primitives,
             };
 
             // We can't use `or_insert_with` here as that uses a closure and closures aren't async.
@@ -475,23 +477,23 @@ pub(crate) async fn load_gltf_from_bytes(
     let gltf = Rc::new(gltf);
     let base_url = Rc::new(base_url);
 
-    let opaque_primitives = opaque_primitives
-        .into_values()
-        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
-        .collect();
-    let alpha_clipped_primitives = alpha_clipped_primitives
-        .into_values()
-        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
-        .collect();
-    let unlit_opaque_primitives = unlit_opaque_primitives
-        .into_values()
-        .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
-        .collect();
-
     Ok(Model {
-        opaque_primitives,
-        alpha_clipped_primitives,
-        unlit_opaque_primitives,
+        opaque_primitives: opaque_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
+        alpha_clipped_primitives: alpha_clipped_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
+        unlit_opaque_primitives: unlit_opaque_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
+        unlit_alpha_clipped_primitives: unlit_alpha_clipped_primitives
+            .into_values()
+            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .collect(),
     })
 }
 
@@ -596,6 +598,13 @@ impl<'a> ImageSource<'a> {
             Self::Bytes(bytes) => Cow::Borrowed(bytes),
         })
     }
+
+    fn extension(&self) -> Option<&str> {
+        match &self {
+            ImageSource::Url(url) => Some(url.path_segments()?.last()?.rsplit_once('.')?.1),
+            ImageSource::Bytes(_) => None,
+        }
+    }
 }
 
 async fn load_image_from_mime_type(
@@ -605,36 +614,41 @@ async fn load_image_from_mime_type(
     mime_type: Option<&str>,
     binding: &MaterialTexture,
 ) -> anyhow::Result<Rc<Texture>> {
-    Ok(if mime_type == Some("image/ktx2") {
-        match source {
-            ImageSource::Bytes(bytes) => Rc::new(load_ktx2_sync(
+    match (mime_type, source.extension()) {
+        (Some("image/ktx2"), _) | (_, Some("ktx2")) => match source {
+            ImageSource::Bytes(bytes) => Ok(Rc::new(load_ktx2_sync(
                 &context.context.device,
                 &context.context.queue,
                 srgb,
                 context.context.compressed_texture_format,
                 bytes,
-            )),
-            ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await?,
+            ))),
+            ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await,
+        },
+        (Some("image/x.basis"), _) | (_, Some("basis")) => {
+            log::error!("Loading .basis files is deprecated!");
+
+            Ok(Rc::new(load_basis(
+                &context.context.device,
+                &context.context.queue,
+                context.context.compressed_texture_format,
+                &source.get_bytes(&context.context.request_client).await?,
+                srgb,
+            )))
         }
-    } else if mime_type == Some("image/x.basis") {
-        log::error!("Loading .basis files is deprecated!");
+        _ => {
+            log::error!(
+                "{:?}: Loading standard jpg/pngs is deprecated!",
+                context.base_url
+            );
 
-        Rc::new(load_basis(
-            &context.context.device,
-            &context.context.queue,
-            context.context.compressed_texture_format,
-            &source.get_bytes(&context.context.request_client).await?,
-            srgb,
-        ))
-    } else {
-        log::error!("Loading standard jpg/pngs is deprecated!");
-
-        Rc::new(load_standard_image_format(
-            &context.context,
-            &source.get_bytes(&context.context.request_client).await?,
-            srgb,
-        ))
-    })
+            Ok(Rc::new(load_standard_image_format(
+                &context.context,
+                &source.get_bytes(&context.context.request_client).await?,
+                srgb,
+            )))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -735,9 +749,14 @@ async fn load_ktx2_async(
         .await?
         .copy_to(&mut header_bytes);
 
-    let header = ktx2::Header::from_bytes(&header_bytes);
+    let header = ktx2::Header::from_bytes(&header_bytes)?;
 
-    header.validate()?;
+    if let Some(format) = header.format {
+        return Err(anyhow::anyhow!(
+            "Expected a UASTC texture, got {:?}",
+            format
+        ));
+    }
 
     let down_scaling_level = context
         .context
@@ -926,8 +945,8 @@ async fn decompress_and_transcode(
         .fetch_bytes(
             url,
             Some(
-                level_index.offset as usize
-                    ..(level_index.offset + level_index.length_bytes) as usize,
+                level_index.byte_offset as usize
+                    ..(level_index.byte_offset + level_index.byte_length) as usize,
             ),
         )
         .await?;
@@ -936,7 +955,7 @@ async fn decompress_and_transcode(
         .spawn(async move {
             let decompressed = match header.supercompression_scheme {
                 Some(ktx2::SupercompressionScheme::Zstandard) => {
-                    zstd::bulk::decompress(&bytes, level_index.uncompressed_length_bytes as usize)?
+                    zstd::bulk::decompress(&bytes, level_index.uncompressed_byte_length as usize)?
                 }
                 Some(other) => panic!("Unsupported: {:?}", other),
                 None => bytes,
@@ -1119,14 +1138,6 @@ impl RequestClient {
         let request_init = construct_request_init(byte_range.clone())?;
 
         let mut cache_url = url.clone();
-
-        if let Some(byte_range) = byte_range.clone() {
-            cache_url.query_pairs_mut().append_pair(
-                "bytes",
-                &format!("{}-{}", byte_range.start, byte_range.end - 1),
-            );
-        }
-
         let mut fetch_url = url.clone();
 
         if url.scheme() == "ipfs" {
@@ -1134,7 +1145,6 @@ impl RequestClient {
 
             let host_err = || anyhow::anyhow!("Failed to get url host");
             let path_segments_err = || anyhow::anyhow!("Failed to get url path segments");
-            let scheme_err = || anyhow::anyhow!("Failed to set scheme");
 
             /*
             fetch_url
@@ -1150,22 +1160,24 @@ impl RequestClient {
             // As a result, we need to rewrite the url to:
             // http://ipfs/<CID>/<PATH>
 
-            cache_url
-                .set_scheme_unchecked("http")
-                .map_err(|_| scheme_err())?;
+            cache_url = url::Url::parse("http://ipfs").unwrap();
 
             // Append the host_str (the CID in this case) to the path.
-            let new_path: Vec<_> = std::iter::once(cache_url.host_str().ok_or_else(host_err)?)
-                .chain(cache_url.path_segments().into_iter().flatten())
+            let new_path: Vec<_> = std::iter::once(url.host_str().ok_or_else(host_err)?)
+                .chain(url.path_segments().into_iter().flatten())
                 .map(|string| string.to_owned())
                 .collect();
             cache_url
                 .path_segments_mut()
                 .map_err(|_| path_segments_err())?
-                .clear()
                 .extend(new_path);
+        }
 
-            cache_url.set_host(Some("ipfs"))?;
+        if let Some(byte_range) = byte_range.clone() {
+            cache_url.query_pairs_mut().append_pair(
+                "bytes",
+                &format!("{}-{}", byte_range.start, byte_range.end - 1),
+            );
         }
 
         let cache_request =
