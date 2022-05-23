@@ -500,7 +500,7 @@ dependencies = [
 [[package]]
 name = "glow"
 version = "0.11.2"
-source = "git+https://github.com/expenses/glow?branch=web-sys-bind-raw-framebuffer#a2c98d1fd5205b95ed5225af808a9a8598d267d4"
+source = "git+https://github.com/expenses/glow?branch=webxr#60dbcbb607ca3bc771bf78829cf7efab5e8262df"
 dependencies = [
  "js-sys",
  "slotmap",
@@ -860,7 +860,7 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 [[package]]
 name = "naga"
 version = "0.8.0"
-source = "git+https://github.com/gfx-rs/naga?rev=571302e#571302e3ff09cb856f63a3683da308159872b7cc"
+source = "git+https://github.com/expenses/naga?branch=webxr#0c66837dde64464503a335b2e234a8f556313efb"
 dependencies = [
  "bit-set",
  "bitflags",
@@ -1633,7 +1633,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr#fde8fe30f61f582ee6e508459332572671e329e0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -1653,7 +1653,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr#fde8fe30f61f582ee6e508459332572671e329e0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -1675,7 +1675,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr#fde8fe30f61f582ee6e508459332572671e329e0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
 dependencies = [
  "arrayvec",
  "ash",
@@ -1712,7 +1712,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr#fde8fe30f61f582ee6e508459332572671e329e0"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
 dependencies = [
  "bitflags",
 ]
