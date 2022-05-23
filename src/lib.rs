@@ -980,12 +980,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .map(|primitive| primitive.bind_group.borrow())
             .collect::<Vec<_>>();
 
-        let mirror_primitives = mirror_model
-            .iter()
-            .flat_map(|model| &model.model.opaque_primitives)
-            .map(|primitive| primitive.bind_group.borrow())
-            .collect::<Vec<_>>();
-
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("command encoder"),
         });
@@ -1057,11 +1051,10 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
                 bind_model_buffers(&mut render_pass, &mirror_model.model);
                 render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
-                render_primitives(
-                    &mut render_pass,
-                    &mirror_model.model.opaque_primitives,
-                    &mirror_primitives,
-                    0..1,
+                render_pass.draw_indexed(
+                    0..mirror_model.model.num_indices,
+                    0,
+                    0..mirror_model.instances.len() as u32,
                 );
             }
 
@@ -1118,11 +1111,10 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
                 bind_model_buffers(&mut render_pass, &mirror_model.model);
                 render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
-                render_primitives(
-                    &mut render_pass,
-                    &mirror_model.model.opaque_primitives,
-                    &mirror_primitives,
-                    0..1,
+                render_pass.draw_indexed(
+                    0..mirror_model.model.num_indices,
+                    0,
+                    0..mirror_model.instances.len() as u32,
                 );
             }
         }
@@ -1181,13 +1173,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
 
-            for primitive in &ui_plane_model.model.opaque_primitives {
-                render_pass.draw_indexed(
-                    primitive.indices_range.clone(),
-                    0,
-                    0..ui_plane_model.instances.len() as u32,
-                );
-            }
+            render_pass.draw_indexed(
+                0..ui_plane_model.model.num_indices,
+                0,
+                0..ui_plane_model.instances.len() as u32,
+            );
         }
 
         {
@@ -1506,7 +1496,7 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
         );
     }
 
-    bind_model_buffers(render_pass, &heads.model);
+    bind_model_buffers(render_pass, heads.model);
     render_pass.set_vertex_buffer(3, heads.instances.slice(..));
 
     render_primitives(
@@ -1516,7 +1506,7 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
         0..heads.num_instances,
     );
 
-    bind_model_buffers(render_pass, &hands.model);
+    bind_model_buffers(render_pass, hands.model);
     render_pass.set_vertex_buffer(3, hands.instances.slice(..));
 
     render_primitives(
@@ -1717,6 +1707,13 @@ impl Pipelines {
         ui_texture_bgl: &wgpu::BindGroupLayout,
         multiview: Option<std::num::NonZeroU32>,
     ) -> Self {
+        let uniform_only_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("uniform only pipeline layout"),
+                bind_group_layouts: &[uniform_bgl],
+                push_constant_ranges: &[],
+            });
+
         let model_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("model pipeline layout"),
@@ -1867,7 +1864,7 @@ impl Pipelines {
         let stencil_write_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("stencil write pipeline"),
-                layout: Some(&model_pipeline_layout),
+                layout: Some(&uniform_only_pipeline_layout),
                 vertex: vertex_state.clone(),
 
                 fragment: Some(wgpu::FragmentState {
@@ -1902,7 +1899,7 @@ impl Pipelines {
 
         let set_depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("set depth pipeline"),
-            layout: Some(&model_pipeline_layout),
+            layout: Some(&uniform_only_pipeline_layout),
             vertex: vertex_state.clone(),
 
             fragment: Some(wgpu::FragmentState {

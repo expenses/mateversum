@@ -333,8 +333,9 @@ pub(crate) struct Model {
     pub(crate) positions: wgpu::Buffer,
     pub(crate) normals: wgpu::Buffer,
     pub(crate) uvs: wgpu::Buffer,
-    // todo: multiple sets of indices for normal and alpha clipped.
     pub(crate) indices: wgpu::Buffer,
+    // todo: use indices ranges for opaque and alpha clipped models.
+    pub(crate) num_indices: u32,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -496,6 +497,7 @@ pub(crate) async fn load_gltf_from_bytes(
                 primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
             })
             .collect(),
+        num_indices: staging_buffers.indices.len() as u32,
         indices: context
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
