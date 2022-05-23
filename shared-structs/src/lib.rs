@@ -7,11 +7,31 @@ use glam::{Mat4, Vec3, Vec4};
 #[cfg_attr(not(target_arch = "spirv"), derive(crevice::std140::AsStd140))]
 #[repr(C)]
 pub struct Uniforms {
-    pub projection_view: FlatMat4,
-    pub eye_position: Vec3,
+    pub left_projection_view: FlatMat4,
+    pub right_projection_view: FlatMat4,
+    pub left_eye_position: Vec3,
+    pub right_eye_position: Vec3,
 }
 
-#[derive(Clone, Copy)]
+impl Uniforms {
+    pub fn projection_view(&self, view_index: i32) -> Mat4 {
+        Mat4::from(if view_index != 0 {
+            self.right_projection_view
+        } else {
+            self.left_projection_view
+        })
+    }
+
+    pub fn eye_position(&self, view_index: i32) -> Vec3 {
+        if view_index != 0 {
+            self.right_eye_position
+        } else {
+            self.left_eye_position
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 #[cfg_attr(not(target_arch = "spirv"), derive(AsStd140))]
 pub struct FlatMat4 {
     col_0: Vec4,
