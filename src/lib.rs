@@ -124,6 +124,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         _ => web_sys::XrReferenceSpaceType::LocalFloor,
     };
 
+    let multiview = if mode == web_sys::XrSessionMode::ImmersiveVr {
+        Some(std::num::NonZeroU32::new(2).unwrap())
+    } else {
+        None
+    };
+
     let required_features = js_sys::Array::of1(&"local-floor".into());
 
     let xr_session: web_sys::XrSession =
@@ -299,7 +305,14 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let tonemap_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("mirror bind group layout"),
-        entries: &[sampler_entry(0), texture_array_entry(1)],
+        entries: &[
+            sampler_entry(0),
+            if multiview.is_none() {
+                texture_entry(1)
+            } else {
+                texture_array_entry(1)
+            },
+        ],
     });
 
     let shader_cache = Rc::new(ResourceCache::default());
@@ -311,6 +324,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &model_bgl,
         &mirror_uniform_bgl,
         &tonemap_bgl,
+        multiview,
     );
 
     let context = Rc::new(ModelLoadContext {
@@ -792,7 +806,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
-        let framebuffer = js_sys::Reflect::get(&base_layer, &"framebuffer".into()).unwrap().into();
+        let framebuffer = js_sys::Reflect::get(&base_layer, &"framebuffer".into())
+            .unwrap()
+            .into();
 
         let texture = unsafe {
             device.create_texture_from_hal::<wgpu_hal::gles::Api>(
@@ -828,14 +844,16 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             )
         };
 
+        let num_views = multiview.map(|views| views.get()).unwrap_or(1);
+
         let hdr_framebuffer = framebuffer_cache.get("hdr framebuffer", || {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some("hdr framebuffer"),
                     size: wgpu::Extent3d {
-                        width: base_layer.framebuffer_width() / 2,
+                        width: base_layer.framebuffer_width() / num_views,
                         height: base_layer.framebuffer_height(),
-                        depth_or_array_layers: 2,
+                        depth_or_array_layers: num_views,
                     },
                     mip_level_count: 1,
                     sample_count: 1,
@@ -845,7 +863,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 })
                 .create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    dimension: Some(if multiview.is_none() {
+                        wgpu::TextureViewDimension::D2
+                    } else {
+                        wgpu::TextureViewDimension::D2Array
+                    }),
                     ..Default::default()
                 })
         });
@@ -872,9 +894,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some("depth"),
                     size: wgpu::Extent3d {
-                        width: base_layer.framebuffer_width() / 2,
+                        width: base_layer.framebuffer_width() / num_views,
                         height: base_layer.framebuffer_height(),
-                        depth_or_array_layers: 2,
+                        depth_or_array_layers: num_views,
                     },
                     mip_level_count: 1,
                     sample_count: 1,
@@ -883,7 +905,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 })
                 .create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    dimension: Some(if multiview.is_none() {
+                        wgpu::TextureViewDimension::D2
+                    } else {
+                        wgpu::TextureViewDimension::D2Array
+                    }),
                     ..Default::default()
                 })
         });
@@ -967,16 +993,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 view: &hdr_framebuffer,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: if mode == web_sys::XrSessionMode::ImmersiveAr {
-                        wgpu::LoadOp::Load
-                    } else {
-                        wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1 / 5.0,
-                            g: 0.2 / 5.0,
-                            b: 0.3 / 5.0,
-                            a: 1.0,
-                        })
-                    },
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1 / 5.0,
+                        g: 0.2 / 5.0,
+                        b: 0.3 / 5.0,
+                        a: 1.0,
+                    }),
                     store: true,
                 },
             }],
@@ -1152,12 +1174,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1 / 5.0,
-                        g: 0.2 / 5.0,
-                        b: 0.3 / 5.0,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Load,
                     store: true,
                 },
             }],
@@ -1446,6 +1463,7 @@ impl PipelineSet {
         mirrored_vertex: wgpu::VertexState,
         opaque_fragment: wgpu::FragmentState,
         alpha_clipped_fragment: wgpu::FragmentState,
+        multiview: Option<std::num::NonZeroU32>,
     ) -> Self {
         let normal_primitive_state = wgpu::PrimitiveState {
             front_face: wgpu::FrontFace::Ccw,
@@ -1486,8 +1504,6 @@ impl PipelineSet {
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
-
-        let multiview = Some(std::num::NonZeroU32::new(2).unwrap());
 
         Self {
             opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1553,6 +1569,7 @@ impl Pipelines {
         model_bgl: &wgpu::BindGroupLayout,
         mirror_uniform_bgl: &wgpu::BindGroupLayout,
         tonemap_bgl: &wgpu::BindGroupLayout,
+        multiview: Option<std::num::NonZeroU32>,
     ) -> Self {
         let model_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1560,8 +1577,6 @@ impl Pipelines {
                 bind_group_layouts: &[uniform_bgl, model_bgl],
                 push_constant_ranges: &[],
             });
-
-        let multiview = Some(std::num::NonZeroU32::new(2).unwrap());
 
         let vertex_buffers = &[
             wgpu::VertexBufferLayout {
@@ -1586,11 +1601,17 @@ impl Pipelines {
             },
         ];
 
+        let prefix = if multiview.is_none() { "single_view::" } else { "" };
+
         let vertex_state = wgpu::VertexState {
             module: shader_cache.get("vertex", || {
-                device.create_shader_module(&wgpu::include_spirv!("../compiled-shaders/vertex.spv"))
+                device.create_shader_module(&if multiview.is_none() {
+                    wgpu::include_spirv!("../compiled-shaders/single_view_vertex.spv")
+                } else {
+                    wgpu::include_spirv!("../compiled-shaders/vertex.spv")
+                })
             }),
-            entry_point: "vertex",
+            entry_point: &format!("{}vertex", prefix),
             buffers: vertex_buffers,
         };
 
@@ -1619,11 +1640,13 @@ impl Pipelines {
             layout: Some(&line_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader_cache.get("line_vertex", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/line_vertex.spv"
-                    ))
+                    device.create_shader_module(&if multiview.is_none() {
+                        wgpu::include_spirv!("../compiled-shaders/single_view_line_vertex.spv")
+                    } else {
+                        wgpu::include_spirv!("../compiled-shaders/line_vertex.spv")
+                    })
                 }),
-                entry_point: "line_vertex",
+                entry_point: &format!("{}line_vertex", prefix),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: 6 * 4,
                     step_mode: wgpu::VertexStepMode::Vertex,
@@ -1669,11 +1692,13 @@ impl Pipelines {
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader_cache.get("tonemap", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/tonemap.spv"
-                    ))
+                    device.create_shader_module(&if multiview.is_none() {
+                        wgpu::include_spirv!("../compiled-shaders/single_view_tonemap.spv")
+                    } else {
+                        wgpu::include_spirv!("../compiled-shaders/tonemap.spv")
+                    })
                 }),
-                entry_point: "tonemap",
+                entry_point: &format!("{}tonemap", prefix),
                 targets: &[wgpu::TextureFormat::Rgba8Unorm.into()],
             }),
             primitive: Default::default(),
@@ -1758,11 +1783,13 @@ impl Pipelines {
 
         let mirrored_vertex = wgpu::VertexState {
             module: shader_cache.get("vertex_mirrored", || {
-                device.create_shader_module(&wgpu::include_spirv!(
-                    "../compiled-shaders/vertex_mirrored.spv"
-                ))
+                device.create_shader_module(&if multiview.is_none() {
+                    wgpu::include_spirv!("../compiled-shaders/single_view_vertex_mirrored.spv")
+                } else {
+                    wgpu::include_spirv!("../compiled-shaders/vertex_mirrored.spv")
+                })
             }),
-            entry_point: "vertex_mirrored",
+            entry_point: &format!("{}vertex_mirrored", prefix),
             buffers: vertex_buffers,
         };
 
@@ -1775,22 +1802,29 @@ impl Pipelines {
                 mirrored_vertex.clone(),
                 wgpu::FragmentState {
                     module: shader_cache.get("fragment", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment.spv"
-                        ))
+                        device.create_shader_module(&if multiview.is_none() {
+                            wgpu::include_spirv!("../compiled-shaders/single_view_fragment.spv")
+                        } else {
+                            wgpu::include_spirv!("../compiled-shaders/fragment.spv")
+                        })
                     }),
-                    entry_point: "fragment",
+                    entry_point: &format!("{}fragment", prefix),
                     targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
                 wgpu::FragmentState {
                     module: shader_cache.get("fragment_alpha_clipped", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_alpha_clipped.spv"
-                        ))
+                        device.create_shader_module(&if multiview.is_none() {
+                            wgpu::include_spirv!(
+                                "../compiled-shaders/single_view_fragment_alpha_clipped.spv"
+                            )
+                        } else {
+                            wgpu::include_spirv!("../compiled-shaders/fragment_alpha_clipped.spv")
+                        })
                     }),
-                    entry_point: "fragment_alpha_clipped",
+                    entry_point: &format!("{}fragment_alpha_clipped", prefix),
                     targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
+                multiview,
             ),
             line: line_pipeline,
             stencil_write: stencil_write_pipeline,
@@ -1820,6 +1854,7 @@ impl Pipelines {
                     entry_point: "fragment_unlit_alpha_clipped",
                     targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                 },
+                multiview,
             ),
         }
     }

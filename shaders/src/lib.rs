@@ -14,6 +14,13 @@ use spirv_std::{
 
 type SampledImage = Image!(2D, type=f32, sampled);
 
+mod single_view;
+
+pub use single_view::{
+    fragment as _, fragment_alpha_clipped as _, line_vertex as _, tonemap as _, vertex as _,
+    vertex_mirrored as _,
+};
+
 #[spirv(vertex)]
 pub fn vertex(
     position: Vec3,
