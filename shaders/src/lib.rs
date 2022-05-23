@@ -245,6 +245,18 @@ pub fn fragment_unlit(
 }
 
 #[spirv(fragment)]
+pub fn fragment_ui(
+    _position: Vec3,
+    _normal: Vec3,
+    uv: Vec2,
+    #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 0)] texture: &SampledImage,
+    output: &mut Vec4,
+) {
+    *output = TextureSampler::new(texture, *sampler, uv).sample();
+}
+
+#[spirv(fragment)]
 pub fn fragment_unlit_alpha_clipped(
     _position: Vec3,
     _normal: Vec3,
