@@ -503,44 +503,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }
     };
 
-    let setup_fn: js_sys::Function =
-        js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())?.into();
-
     let send_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())?.into();
 
     let player_states = Rc::new(RefCell::new(std::collections::HashMap::new()));
-    let on_message = {
-        let player_states = Rc::clone(&player_states);
+    let movement = Rc::new(RefCell::new(None));
 
-        wasm_bindgen::closure::Closure::wrap(Box::new(
-            move |uint8: js_sys::Uint8Array, peer_id: String| {
-                let mut bytes = [0; 96];
-                uint8.copy_to(&mut bytes);
-                if !bytes.is_empty() {
-                    // Bytemuck panics with an alignment error if we try and cast to an instance.
-                    let instances: &[Instance] = cast_slice(&bytes);
-                    player_states.borrow_mut().insert(
-                        peer_id,
-                        PlayerState {
-                            head: instances[0],
-                            hands: [instances[1], instances[2]],
-                        },
-                    );
-                } else {
-                    log::info!("Got {} bytes; ignoring", bytes.len());
-                }
-            },
-        )
-            as Box<dyn FnMut(js_sys::Uint8Array, String)>)
-    };
-
-    setup_fn.call1(
-        &wasm_bindgen::JsValue::undefined(),
-        on_message.as_ref().unchecked_ref(),
+    setup_callbacks(
+        &xr_session,
+        &reference_space,
+        player_states.clone(),
+        movement.clone(),
     )?;
-    // We need do this this as otherwise `on_message` is dropped when `run()` finishes.
-    on_message.forget();
 
     let mut player_heads_buffer =
         ResizingBuffer::new_with_capacity(&device, 4 * 4 * 3, wgpu::BufferUsages::VERTEX);
@@ -622,73 +596,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             resource: mirror_uniform_buffer.as_entire_binding(),
         }],
     });
-
-    let movement = Rc::new(RefCell::new(None));
-
-    let on_select_start_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
-        let reference_space = reference_space.clone();
-        let movement = Rc::clone(&movement);
-
-        move |event: web_sys::XrInputSourceEvent| {
-            let frame = event.frame();
-            let input_source = event.input_source();
-
-            let target_ray_mode = input_source.target_ray_mode();
-
-            if target_ray_mode == web_sys::XrTargetRayMode::Screen {
-                if let Some(grip_pose) =
-                    frame.get_pose(&input_source.target_ray_space(), &reference_space)
-                {
-                    let transform = grip_pose.transform();
-                    // Where a tap occurred, and the rotation
-                    let instance = Instance::from_transform(transform, 1.0);
-                    let tap_direction = instance.rotation * Vec3::Z;
-
-                    log::info!("Starting {:?}", tap_direction);
-
-                    *movement.borrow_mut() = Some(tap_direction);
-                }
-            }
-        }
-    })
-        as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
-
-    let on_select_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
-        let _reference_space = reference_space.clone();
-        let movement = Rc::clone(&movement);
-
-        move |_event: web_sys::XrInputSourceEvent| {
-            *movement.borrow_mut() = None;
-
-            /*
-            let frame = event.frame();
-            let input_source = event.input_source();
-
-            let target_ray_mode = input_source.target_ray_mode();
-
-            if target_ray_mode == web_sys::XrTargetRayMode::Screen {
-                if let Some(grip_pose) =
-                    frame.get_pose(&input_source.target_ray_space(), &reference_space)
-                {
-                    let transform = grip_pose.transform();
-                    // Where a tap occurred, and the rotation
-                    let instance = Instance::from_transform(transform, 1.0);
-                    let tap_direction = instance.rotation * Vec3::Z;
-
-                    log::info!("Ending {:?}", tap_direction);
-                }
-            }
-            */
-        }
-    })
-        as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
-
-    xr_session.set_onselectstart(Some(on_select_start_closure.as_ref().unchecked_ref()));
-
-    xr_session.set_onselect(Some(on_select_closure.as_ref().unchecked_ref()));
-
-    on_select_closure.forget();
-    on_select_start_closure.forget();
 
     let framebuffer_cache = ResourceCache::default();
     let bind_group_cache = ResourceCache::default();
@@ -1317,6 +1224,115 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         queue.submit(std::iter::once(encoder.finish()));
     });
+
+    Ok(())
+}
+
+fn setup_callbacks(
+    xr_session: &web_sys::XrSession,
+    reference_space: &web_sys::XrReferenceSpace,
+    player_states: Rc<RefCell<HashMap<String, PlayerState>>>,
+    movement: Rc<RefCell<Option<Vec3>>>,
+) -> Result<(), wasm_bindgen::JsValue> {
+    let setup_fn: js_sys::Function =
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())?.into();
+
+    let on_message = {
+        let player_states = Rc::clone(&player_states);
+
+        wasm_bindgen::closure::Closure::wrap(Box::new(
+            move |uint8: js_sys::Uint8Array, peer_id: String| {
+                let mut bytes = [0; 96];
+                uint8.copy_to(&mut bytes);
+                if !bytes.is_empty() {
+                    // Bytemuck panics with an alignment error if we try and cast to an instance.
+                    let instances: &[Instance] = cast_slice(&bytes);
+                    player_states.borrow_mut().insert(
+                        peer_id,
+                        PlayerState {
+                            head: instances[0],
+                            hands: [instances[1], instances[2]],
+                        },
+                    );
+                } else {
+                    log::info!("Got {} bytes; ignoring", bytes.len());
+                }
+            },
+        )
+            as Box<dyn FnMut(js_sys::Uint8Array, String)>)
+    };
+
+    setup_fn.call1(
+        &wasm_bindgen::JsValue::undefined(),
+        on_message.as_ref().unchecked_ref(),
+    )?;
+    // We need do this this as otherwise `on_message` is dropped when `run()` finishes.
+    on_message.forget();
+
+    let on_select_start_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
+        let reference_space = reference_space.clone();
+        let movement = Rc::clone(&movement);
+
+        move |event: web_sys::XrInputSourceEvent| {
+            let frame = event.frame();
+            let input_source = event.input_source();
+
+            let target_ray_mode = input_source.target_ray_mode();
+
+            if target_ray_mode == web_sys::XrTargetRayMode::Screen {
+                if let Some(grip_pose) =
+                    frame.get_pose(&input_source.target_ray_space(), &reference_space)
+                {
+                    let transform = grip_pose.transform();
+                    // Where a tap occurred, and the rotation
+                    let instance = Instance::from_transform(transform, 1.0);
+                    let tap_direction = instance.rotation * Vec3::Z;
+
+                    log::info!("Starting {:?}", tap_direction);
+
+                    *movement.borrow_mut() = Some(tap_direction);
+                }
+            }
+        }
+    })
+        as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
+
+    let on_select_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
+        let _reference_space = reference_space.clone();
+        let movement = Rc::clone(&movement);
+
+        move |_event: web_sys::XrInputSourceEvent| {
+            *movement.borrow_mut() = None;
+
+            /*
+            let frame = event.frame();
+            let input_source = event.input_source();
+
+            let target_ray_mode = input_source.target_ray_mode();
+
+            if target_ray_mode == web_sys::XrTargetRayMode::Screen {
+                if let Some(grip_pose) =
+                    frame.get_pose(&input_source.target_ray_space(), &reference_space)
+                {
+                    let transform = grip_pose.transform();
+                    // Where a tap occurred, and the rotation
+                    let instance = Instance::from_transform(transform, 1.0);
+                    let tap_direction = instance.rotation * Vec3::Z;
+
+                    log::info!("Ending {:?}", tap_direction);
+                }
+            }
+            */
+        }
+    })
+        as Box<dyn FnMut(web_sys::XrInputSourceEvent)>);
+
+    xr_session.set_onselectstart(Some(on_select_start_closure.as_ref().unchecked_ref()));
+
+    xr_session.set_onselect(Some(on_select_closure.as_ref().unchecked_ref()));
+
+    on_select_closure.forget();
+    on_select_start_closure.forget();
 
     Ok(())
 }
