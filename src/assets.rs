@@ -641,7 +641,7 @@ async fn load_image_from_mime_type(
                 "Loading standard jpg/pngs is deprecated: {:?}",
                 match &source {
                     ImageSource::Url(url) => Some(url.as_str()),
-                    ImageSource::Bytes(_) => None
+                    ImageSource::Bytes(_) => None,
                 }
             );
 

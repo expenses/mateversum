@@ -315,6 +315,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         ],
     });
 
+    let ui_texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ui texture bind group layout"),
+        entries: &[texture_entry(0)],
+    });
+
     let shader_cache = Rc::new(ResourceCache::default());
 
     let pipelines = Pipelines::new(
@@ -324,6 +329,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &model_bgl,
         &mirror_uniform_bgl,
         &tonemap_bgl,
+        &ui_texture_bgl,
         multiview,
     );
 
@@ -466,6 +472,35 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         })
     } else {
         None
+    };
+
+    let ui_plane_model = {
+        let url = url::Url::options()
+            .base_url(Some(&href))
+            .parse("ui/ui_plane.gltf")
+            .unwrap();
+
+        let bytes = context
+            .request_client
+            .fetch_bytes(&url, None)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let model = load_gltf_from_bytes(&bytes, Some(url), &context)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let instances = vec![Instance::default()];
+
+        InstancedModel {
+            model,
+            instance_buffer: ResizingBuffer::new(
+                &device,
+                bytemuck::cast_slice(&instances),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            instances,
+        }
     };
 
     let setup_fn: js_sys::Function =
@@ -660,7 +695,39 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let mut offset = Vec3::ZERO;
 
-    wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |_time, frame| {
+    let egui_ctx = egui::Context::default();
+    let mut egui_renderer =
+        egui_wgpu::renderer::RenderPass::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, 1);
+
+    wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |time, frame| {
+        let time = time / 1000.0;
+
+        let egui_input = egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        };
+
+        let egui_output = egui_ctx.run(egui_input, |ctx| {
+            egui::containers::Window::new("This is a window").show(ctx, |ui| {
+                ui.label("This is a label");
+            });
+        });
+
+        for (id, image_delta) in &egui_output.textures_delta.set {
+            egui_renderer.update_texture(&device, &queue, *id, image_delta);
+        }
+        for id in &egui_output.textures_delta.free {
+            egui_renderer.free_texture(id);
+        }
+
+        let screen_descriptor = egui_wgpu::renderer::ScreenDescriptor {
+            size_in_pixels: [1024, 1024],
+            pixels_per_point: 2.0,
+        };
+
+        let egui_primitives = egui_ctx.tessellate(egui_output.shapes);
+        egui_renderer.update_buffers(&device, &queue, &egui_primitives, &screen_descriptor);
+
         let movement = movement.borrow();
 
         if let Some(movement) = movement.as_ref() {
@@ -810,7 +877,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .unwrap()
             .into();
 
-        let texture = unsafe {
+        let view = unsafe {
             device.create_texture_from_hal::<wgpu_hal::gles::Api>(
                 wgpu_hal::gles::Texture {
                     inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
@@ -842,7 +909,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 },
             )
-        };
+        }
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
         let num_views = multiview.map(|views| views.get()).unwrap_or(1);
 
@@ -883,7 +951,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&hdr_framebuffer),
+                        resource: wgpu::BindingResource::TextureView(hdr_framebuffer),
                     },
                 ],
             })
@@ -914,7 +982,35 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 })
         });
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let ui_texture = framebuffer_cache.get("ui texture", || {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hdr framebuffer"),
+                    size: wgpu::Extent3d {
+                        width: 1024,
+                        height: 1024,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                })
+                .create_view(&Default::default())
+        });
+
+        let ui_texture_bind_group = bind_group_cache.get("ui texture bind group", || {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ui texture bind group"),
+                layout: &ui_texture_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(ui_texture),
+                }],
+            })
+        });
 
         // We borrow all the bind groups here because they need to be borrowed for the entire duration of the render pass.
 
@@ -987,10 +1083,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             label: Some("command encoder"),
         });
 
+        egui_renderer.execute(
+            &mut encoder,
+            ui_texture,
+            &egui_primitives,
+            &screen_descriptor,
+            Some(wgpu::Color::TRANSPARENT),
+        );
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
             color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &hdr_framebuffer,
+                view: hdr_framebuffer,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1003,7 +1107,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 },
             }],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth,
+                view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: true,
@@ -1158,6 +1262,28 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &heads,
                 &hands,
             );
+        }
+
+        {
+            render_pass.set_pipeline(&pipelines.ui);
+
+            render_pass.set_vertex_buffer(3, ui_plane_model.instance_buffer.inner.slice(..));
+
+            render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
+
+            for primitive in &ui_plane_model.model.opaque_primitives {
+                render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
+                render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
+                render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
+                render_pass
+                    .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
+
+                render_pass.draw_indexed(
+                    0..primitive.num_indices,
+                    0,
+                    0..ui_plane_model.instances.len() as u32,
+                );
+            }
         }
 
         {
@@ -1559,6 +1685,7 @@ struct Pipelines {
     stencil_write: wgpu::RenderPipeline,
     set_depth: wgpu::RenderPipeline,
     tonemap: wgpu::RenderPipeline,
+    ui: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -1569,6 +1696,7 @@ impl Pipelines {
         model_bgl: &wgpu::BindGroupLayout,
         mirror_uniform_bgl: &wgpu::BindGroupLayout,
         tonemap_bgl: &wgpu::BindGroupLayout,
+        ui_texture_bgl: &wgpu::BindGroupLayout,
         multiview: Option<std::num::NonZeroU32>,
     ) -> Self {
         let model_pipeline_layout =
@@ -1797,6 +1925,26 @@ impl Pipelines {
             buffers: vertex_buffers,
         };
 
+        let normal_primitive_state = wgpu::PrimitiveState {
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        };
+
+        let normal_depth_state = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: wgpu::StencilState::default(),
+        };
+
+        let ui_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ui pipeline layout"),
+            bind_group_layouts: &[uniform_bgl, ui_texture_bgl],
+            push_constant_ranges: &[],
+        });
+
         Self {
             pbr: PipelineSet::new(
                 device,
@@ -1838,7 +1986,7 @@ impl Pipelines {
                 device,
                 &model_pipeline_layout,
                 &mirrored_pipeline_layout,
-                vertex_state,
+                vertex_state.clone(),
                 mirrored_vertex,
                 wgpu::FragmentState {
                     module: shader_cache.get("fragment_unlit", || {
@@ -1860,6 +2008,28 @@ impl Pipelines {
                 },
                 multiview,
             ),
+            ui: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&ui_pipeline_layout),
+                vertex: vertex_state.clone(),
+                fragment: Some(wgpu::FragmentState {
+                    module: shader_cache.get("fragment_ui", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_ui.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_ui",
+                    targets: &[wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }],
+                }),
+                primitive: normal_primitive_state,
+                depth_stencil: Some(normal_depth_state),
+                multisample: Default::default(),
+                multiview,
+            }),
         }
     }
 }
