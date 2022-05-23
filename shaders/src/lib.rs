@@ -339,11 +339,12 @@ pub fn fullscreen_tri(
 
 #[spirv(fragment)]
 pub fn blit(
-    uv: Vec2,
+    mut uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
     #[spirv(descriptor_set = 0, binding = 1)] texture: &SampledImage,
     output: &mut Vec4,
 ) {
+    uv.y = 1.0 - uv.y;
     *output = texture.sample_by_lod(*sampler, uv, 0.0);
 }
 

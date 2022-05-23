@@ -638,8 +638,11 @@ async fn load_image_from_mime_type(
         }
         _ => {
             log::error!(
-                "{:?}: Loading standard jpg/pngs is deprecated!",
-                context.base_url
+                "Loading standard jpg/pngs is deprecated: {:?}",
+                match &source {
+                    ImageSource::Url(url) => Some(url.as_str()),
+                    ImageSource::Bytes(_) => None
+                }
             );
 
             Ok(Rc::new(load_standard_image_format(
