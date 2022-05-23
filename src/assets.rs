@@ -157,15 +157,19 @@ fn create_model_bind_group(
 }
 
 pub(crate) struct ModelPrimitive {
-    pub(crate) indices: wgpu::Buffer,
-    pub(crate) positions: wgpu::Buffer,
-    pub(crate) normals: wgpu::Buffer,
-    pub(crate) uvs: wgpu::Buffer,
     pub(crate) bind_group: Rc<RefCell<wgpu::BindGroup>>,
-    pub(crate) num_indices: u32,
+    pub(crate) indices_range: std::ops::Range<u32>,
     // We hold handles onto the used textures here, so that when the model is dropped, the `Rc::strong_count`
     // of the textures goes down. Then we are able to unload the textures from GPU memory by `HashMap::retain`ing the fetched images..
     _textures: Rc<MaterialTextures>,
+}
+
+#[derive(Default)]
+struct StagingBuffers {
+    indices: Vec<u32>,
+    positions: Vec<Vec3>,
+    normals: Vec<Vec3>,
+    uvs: Vec<Vec2>,
 }
 
 struct StagingModelPrimitive {
@@ -184,6 +188,7 @@ impl StagingModelPrimitive {
         context: &Rc<ModelLoadContext>,
         buffers: &Rc<ModelBuffers>,
         base_url: &Rc<Option<url::Url>>,
+        staging_buffers: &mut StagingBuffers,
     ) -> ModelPrimitive {
         let textures = Rc::new(MaterialTextures {
             albedo_texture: MaterialTexture::new(Rc::clone(&context.white_image), context),
@@ -300,48 +305,36 @@ impl StagingModelPrimitive {
             }
         });
 
+        let indices_start = staging_buffers.indices.len() as u32;
+        let num_vertices = staging_buffers.positions.len() as u32;
+
+        staging_buffers
+            .indices
+            .extend(self.indices.iter().map(|index| index + num_vertices));
+        staging_buffers.positions.extend_from_slice(&self.positions);
+        staging_buffers.normals.extend_from_slice(&self.normals);
+        staging_buffers.uvs.extend_from_slice(&self.uvs);
+
+        let indices_end = staging_buffers.indices.len() as u32;
+
         ModelPrimitive {
             bind_group,
-            num_indices: self.indices.len() as u32,
-            indices: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("indices"),
-                    contents: bytemuck::cast_slice(&self.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                }),
-            positions: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("positions"),
-                    contents: bytemuck::cast_slice(&self.positions),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-            normals: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("normals"),
-                    contents: bytemuck::cast_slice(&self.normals),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-            uvs: context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("uvs"),
-                    contents: bytemuck::cast_slice(&self.uvs),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
+            indices_range: indices_start..indices_end,
             _textures: textures,
         }
     }
 }
 
-#[derive(Default)]
 pub(crate) struct Model {
     pub(crate) opaque_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
     pub(crate) unlit_opaque_primitives: Vec<ModelPrimitive>,
     pub(crate) unlit_alpha_clipped_primitives: Vec<ModelPrimitive>,
+    pub(crate) positions: wgpu::Buffer,
+    pub(crate) normals: wgpu::Buffer,
+    pub(crate) uvs: wgpu::Buffer,
+    // todo: multiple sets of indices for normal and alpha clipped.
+    pub(crate) indices: wgpu::Buffer,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -476,24 +469,61 @@ pub(crate) async fn load_gltf_from_bytes(
     let buffers = Rc::new(buffers);
     let gltf = Rc::new(gltf);
     let base_url = Rc::new(base_url);
+    let mut staging_buffers = StagingBuffers::default();
 
     Ok(Model {
         opaque_primitives: opaque_primitives
             .into_values()
-            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .map(|primitive| {
+                primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
+            })
             .collect(),
         alpha_clipped_primitives: alpha_clipped_primitives
             .into_values()
-            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .map(|primitive| {
+                primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
+            })
             .collect(),
         unlit_opaque_primitives: unlit_opaque_primitives
             .into_values()
-            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .map(|primitive| {
+                primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
+            })
             .collect(),
         unlit_alpha_clipped_primitives: unlit_alpha_clipped_primitives
             .into_values()
-            .map(|primitive| primitive.upload(&gltf, context, &buffers, &base_url))
+            .map(|primitive| {
+                primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
+            })
             .collect(),
+        indices: context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("indices"),
+                contents: bytemuck::cast_slice(&staging_buffers.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+        positions: context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("positions"),
+                contents: bytemuck::cast_slice(&staging_buffers.positions),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        normals: context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("normals"),
+                contents: bytemuck::cast_slice(&staging_buffers.normals),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        uvs: context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("uvs"),
+                contents: bytemuck::cast_slice(&staging_buffers.uvs),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
     })
 }
 

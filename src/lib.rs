@@ -1055,6 +1055,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             {
                 render_pass.set_pipeline(&pipelines.stencil_write);
 
+                bind_model_buffers(&mut render_pass, &mirror_model.model);
                 render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
                 render_primitives(
                     &mut render_pass,
@@ -1115,6 +1116,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             {
                 render_pass.set_pipeline(&pipelines.set_depth);
 
+                bind_model_buffers(&mut render_pass, &mirror_model.model);
                 render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
                 render_primitives(
                     &mut render_pass,
@@ -1174,19 +1176,14 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         {
             render_pass.set_pipeline(&pipelines.ui);
 
+            bind_model_buffers(&mut render_pass, &ui_plane_model.model);
             render_pass.set_vertex_buffer(3, ui_plane_model.instance_buffer.inner.slice(..));
 
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
 
             for primitive in &ui_plane_model.model.opaque_primitives {
-                render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
-                render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
-                render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
-                render_pass
-                    .set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
-
                 render_pass.draw_indexed(
-                    0..primitive.num_indices,
+                    primitive.indices_range.clone(),
                     0,
                     0..ui_plane_model.instances.len() as u32,
                 );
@@ -1456,6 +1453,13 @@ struct PlayerState {
     hands: [Instance; 2],
 }
 
+fn bind_model_buffers<'a>(render_pass: &mut wgpu::RenderPass<'a>, model: &'a assets::Model) {
+    render_pass.set_vertex_buffer(0, model.positions.slice(..));
+    render_pass.set_vertex_buffer(1, model.normals.slice(..));
+    render_pass.set_vertex_buffer(2, model.uvs.slice(..));
+    render_pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
+}
+
 fn render_primitives<'a>(
     render_pass: &mut wgpu::RenderPass<'a>,
     primitives: &'a [ModelPrimitive],
@@ -1463,13 +1467,8 @@ fn render_primitives<'a>(
     instance_range: std::ops::Range<u32>,
 ) {
     for (primitive_index, primitive) in primitives.iter().enumerate() {
-        render_pass.set_vertex_buffer(0, primitive.positions.slice(..));
-        render_pass.set_vertex_buffer(1, primitive.normals.slice(..));
-        render_pass.set_vertex_buffer(2, primitive.uvs.slice(..));
-        render_pass.set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
-
         render_pass.set_bind_group(1, &bind_groups[primitive_index], &[]);
-        render_pass.draw_indexed(0..primitive.num_indices, 0, instance_range.clone());
+        render_pass.draw_indexed(primitive.indices_range.clone(), 0, instance_range.clone());
     }
 }
 
@@ -1496,6 +1495,7 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
     hands: &HeadOrHandsRenderingData<'a>,
 ) {
     for (model_index, model) in models.iter().enumerate() {
+        bind_model_buffers(render_pass, &model.model);
         render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
 
         render_primitives(
@@ -1506,6 +1506,7 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
         );
     }
 
+    bind_model_buffers(render_pass, &heads.model);
     render_pass.set_vertex_buffer(3, heads.instances.slice(..));
 
     render_primitives(
@@ -1515,6 +1516,7 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
         0..heads.num_instances,
     );
 
+    bind_model_buffers(render_pass, &hands.model);
     render_pass.set_vertex_buffer(3, hands.instances.slice(..));
 
     render_primitives(
