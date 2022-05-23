@@ -1601,7 +1601,11 @@ impl Pipelines {
             },
         ];
 
-        let prefix = if multiview.is_none() { "single_view::" } else { "" };
+        let prefix = if multiview.is_none() {
+            "single_view::"
+        } else {
+            ""
+        };
 
         let vertex_state = wgpu::VertexState {
             module: shader_cache.get("vertex", || {

@@ -13,14 +13,19 @@ pub fn vertex(
     out_normal: &mut Vec3,
     out_uv: &mut Vec2,
 ) {
-    let instance_scale = instance_translation_and_scale.w;
-    let instance_translation = instance_translation_and_scale.truncate();
-
-    let position = instance_translation + (instance_rotation * instance_scale * position);
-    *builtin_pos = uniforms.projection_view(0) * position.extend(1.0);
-    *out_position = position;
-    *out_normal = instance_rotation * normal;
-    *out_uv = uv;
+    super::vertex(
+        position,
+        normal,
+        uv,
+        instance_translation_and_scale,
+        instance_rotation,
+        uniforms,
+        builtin_pos,
+        0,
+        out_position,
+        out_normal,
+        out_uv,
+    );
 }
 
 #[spirv(fragment)]
@@ -41,37 +46,24 @@ pub fn fragment(
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
     output: &mut Vec4,
 ) {
-    let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
-    let metallic_roughness_texture = TextureSampler::new(
-        metallic_roughness_texture,
-        *metallic_roughness_texture_sampler,
-        uv,
-    );
-    let normal_texture = TextureSampler::new(normal_texture, *normal_texture_sampler, uv);
-    let emissive_texture = TextureSampler::new(emissive_texture, *emissive_texture_sampler, uv);
-
-    let material_params = ExtendedMaterialParams::new(
-        &albedo_texture,
-        &metallic_roughness_texture,
-        &emissive_texture,
-        &material_settings,
-    );
-
-    let view_vector = (uniforms.eye_position(0) - position).normalize();
-
-    let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
-
-    let brdf_params = glam_pbr::BasicBrdfParams {
+    super::fragment(
+        position,
         normal,
-        light: glam_pbr::Light(Vec3::ONE.normalize()),
-        light_intensity: Vec3::ONE,
-        view: glam_pbr::View(view_vector),
-        material_params: material_params.base,
-    };
-
-    let result = glam_pbr::basic_brdf(brdf_params);
-
-    *output = (result.diffuse + result.specular + material_params.emission).extend(1.0);
+        uv,
+        uniforms,
+        _sampler,
+        albedo_texture,
+        normal_texture,
+        metallic_roughness_texture,
+        emissive_texture,
+        material_settings,
+        albedo_texture_sampler,
+        normal_texture_sampler,
+        metallic_roughness_texture_sampler,
+        emissive_texture_sampler,
+        0,
+        output,
+    );
 }
 
 #[spirv(fragment)]
@@ -92,42 +84,24 @@ pub fn fragment_alpha_clipped(
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
     output: &mut Vec4,
 ) {
-    let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
-    let metallic_roughness_texture = TextureSampler::new(
-        metallic_roughness_texture,
-        *metallic_roughness_texture_sampler,
-        uv,
-    );
-    let normal_texture = TextureSampler::new(normal_texture, *normal_texture_sampler, uv);
-    let emissive_texture = TextureSampler::new(emissive_texture, *emissive_texture_sampler, uv);
-
-    let material_params = ExtendedMaterialParams::new(
-        &albedo_texture,
-        &metallic_roughness_texture,
-        &emissive_texture,
-        &material_settings,
-    );
-
-    let view_vector = (uniforms.eye_position(0) - position).normalize();
-
-    let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
-
-    // We can only do this after we've sampled all textures for naga control flow reasons.
-    if material_params.alpha < 0.5 {
-        spirv_std::arch::kill();
-    }
-
-    let brdf_params = glam_pbr::BasicBrdfParams {
+    super::fragment_alpha_clipped(
+        position,
         normal,
-        light: glam_pbr::Light(Vec3::ONE.normalize()),
-        light_intensity: Vec3::ONE,
-        view: glam_pbr::View(view_vector),
-        material_params: material_params.base,
-    };
-
-    let result = glam_pbr::basic_brdf(brdf_params);
-
-    *output = (result.diffuse + result.specular + material_params.emission).extend(1.0);
+        uv,
+        uniforms,
+        _sampler,
+        albedo_texture,
+        normal_texture,
+        metallic_roughness_texture,
+        emissive_texture,
+        material_settings,
+        albedo_texture_sampler,
+        normal_texture_sampler,
+        metallic_roughness_texture_sampler,
+        emissive_texture_sampler,
+        0,
+        output,
+    );
 }
 
 #[spirv(vertex)]
@@ -138,8 +112,7 @@ pub fn line_vertex(
     #[spirv(position)] builtin_pos: &mut Vec4,
     out_colour: &mut Vec3,
 ) {
-    *builtin_pos = uniforms.projection_view(0) * position.extend(1.0);
-    *out_colour = colour;
+    super::line_vertex(position, colour, uniforms, builtin_pos, 0, out_colour);
 }
 
 #[spirv(vertex)]
@@ -156,20 +129,20 @@ pub fn vertex_mirrored(
     out_normal: &mut Vec3,
     out_uv: &mut Vec2,
 ) {
-    let instance_scale = instance_translation_and_scale.w;
-    let instance_translation = instance_translation_and_scale.truncate();
-
-    let position = instance_translation + (instance_rotation * instance_scale * position);
-    *builtin_pos = uniforms.projection_view(0)
-        * shared_structs::reflect_in_mirror(
-            position,
-            mirror_uniforms.position,
-            mirror_uniforms.normal,
-        )
-        .extend(1.0);
-    *out_position = position;
-    *out_normal = instance_rotation * normal;
-    *out_uv = uv;
+    super::vertex_mirrored(
+        position,
+        normal,
+        uv,
+        instance_translation_and_scale,
+        instance_rotation,
+        uniforms,
+        mirror_uniforms,
+        builtin_pos,
+        0,
+        out_position,
+        out_normal,
+        out_uv,
+    )
 }
 
 #[spirv(fragment)]
