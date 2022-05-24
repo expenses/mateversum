@@ -784,7 +784,7 @@ dependencies = [
 [[package]]
 name = "ktx2"
 version = "0.3.0"
-source = "git+https://github.com/expenses/ktx2?branch=expose-more#d9886f971db67303fe394e37e3a4fbda1552c20b"
+source = "git+https://github.com/BVE-Reborn/ktx2#b7ec16a2c79fadfa65855f3e996cb071e63e19f1"
 dependencies = [
  "bitflags",
 ]
@@ -1709,7 +1709,7 @@ source = "git+https://github.com/rustwasm/wasm-bindgen#63872ee3514fa656f167e2d0a
 [[package]]
 name = "wasm-futures-executor"
 version = "0.2.0"
-source = "git+https://github.com/expenses/wasm-futures-executor?branch=unbounded#1a7564bc8ea50ebee496f7229bcf621a4635bf54"
+source = "git+https://github.com/wngr/wasm-futures-executor#be944fac6416f053ab22bf86d2682d8c43fc5ad8"
 dependencies = [
  "futures",
  "js-sys",
