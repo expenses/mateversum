@@ -657,7 +657,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     }
 
                     if i == 0 {
-                        web_sys::console::log_1(&input_source.gamepad());
+                        if let Some(gamepad) = input_source.gamepad() {
+                            web_sys::console::log_1(&gamepad);
+                        }
                     }
                 }
             }
