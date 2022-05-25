@@ -11,28 +11,28 @@
     {
       "url": "mirror/rim.gltf",
       "position": [
-        -1.8,
+        -2.5,
         2.25,
-        -0.75
+        0
       ],
       "rotation": [
-          0.0,
-          45.0,
-          0.0
+        0,
+        90,
+        0
       ]
     }
   ],
   "mirror": {
     "url": "mirror/mirror_inner.gltf",
     "position": [
-      -1.8,
+      -2.5,
       2.25,
-      -0.75
+      0
     ],
     "rotation": [
-        0.0,
-        45.0,
-        0.0
+      0,
+      90,
+      0
     ]
   }
 }
