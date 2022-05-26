@@ -406,20 +406,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .borrow_mut()
             .insert(model_url.as_str().to_string(), slot);
 
-        wasm_bindgen_futures::spawn_local(async move {
-            let bytes = context
-                .request_client
-                .fetch_bytes(&model_url, None)
-                .await
-                .unwrap();
-            let model = load_gltf_from_bytes(&bytes, Some(model_url.clone()), &context)
-                .await
-                .unwrap();
-
-            if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
-                instanced_model.model = Some(model);
-            }
-        });
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Err(error) = load_model(model_url, slot, context, &models).await {
+                    log::error!("Failed to load model: {}", error);
+                }
+            });
     }
 
     let hand_model = {
@@ -1262,11 +1253,11 @@ fn setup_callbacks(
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_handle_spawn".into())?.into();
 
     let handle_spawn = wasm_bindgen::closure::Closure::wrap(Box::new({
-        move |url: String, position: js_sys::Array| {
+        let handle_spawn_fallible = move |url: String, position: js_sys::Array| -> anyhow::Result<()> {
             let position = glam::DVec3::new(
-                position.get(0).as_f64().unwrap(),
-                position.get(1).as_f64().unwrap(),
-                position.get(2).as_f64().unwrap(),
+                position.get(0).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                position.get(1).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                position.get(2).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
             )
             .as_vec3();
 
@@ -1309,8 +1300,7 @@ fn setup_callbacks(
             } else {
                 let model_url = url::Url::options()
                     .base_url(Some(&href))
-                    .parse(&url)
-                    .unwrap();
+                    .parse(&url)?;
 
                 urls_to_model_slots
                     .borrow_mut()
@@ -1320,19 +1310,18 @@ fn setup_callbacks(
                 let models = models.clone();
 
                 wasm_bindgen_futures::spawn_local(async move {
-                    let bytes = context
-                        .request_client
-                        .fetch_bytes(&model_url, None)
-                        .await
-                        .unwrap();
-                    let model = load_gltf_from_bytes(&bytes, Some(model_url.clone()), &context)
-                        .await
-                        .unwrap();
-
-                    if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
-                        instanced_model.model = Some(model);
+                    if let Err(error) = load_model(model_url, slot, context, &models).await {
+                        log::error!("Failed to load model: {}", error);
                     }
                 });
+            }
+
+            Ok(())
+        };
+
+        move |url: String, position: js_sys::Array| {
+            if let Err(error) = handle_spawn_fallible(url, position) {
+                log::error!("Failed to spawn: {}", error);
             }
         }
     })
@@ -2162,4 +2151,21 @@ pub fn append_break() {
         .unwrap();
 
     body.append_child(&web_sys::Element::from(br)).unwrap();
+}
+
+type Models = Rc<RefCell<slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>>>;
+
+async fn load_model(url: url::Url, slot: slotmap::DefaultKey, context: Rc<ModelLoadContext>, models: &Models) -> anyhow::Result<()> {
+    let bytes = context
+        .request_client
+        .fetch_bytes(&url, None)
+        .await?;
+    let model = load_gltf_from_bytes(&bytes, Some(url), &context)
+        .await?;
+
+    if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
+        instanced_model.model = Some(model);
+    }
+
+    Ok(())
 }
