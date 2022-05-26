@@ -655,7 +655,36 @@ async fn load_image_from_mime_type(
                 context.context.compressed_texture_format,
                 bytes,
             ))),
-            ImageSource::Url(url) => load_ktx2_async(context, srgb, &url, binding).await,
+            ImageSource::Url(url) => {
+                let on_level_load = {
+                    let textures = Rc::clone(&context.textures);
+                    let material_settings = Rc::clone(&context.material_settings);
+                    let bind_group = Rc::clone(&context.bind_group);
+                    let context = Rc::clone(&context.context);
+                    let sampler = Rc::clone(&binding.sampler);
+
+                    move |level: u32| {
+                        *sampler.borrow_mut() =
+                            Rc::new(context.device.create_sampler(&wgpu::SamplerDescriptor {
+                                address_mode_u: wgpu::AddressMode::Repeat,
+                                address_mode_v: wgpu::AddressMode::Repeat,
+                                mag_filter: wgpu::FilterMode::Linear,
+                                min_filter: wgpu::FilterMode::Linear,
+                                mipmap_filter: wgpu::FilterMode::Linear,
+                                anisotropy_clamp: context.performance_settings.anisotropy_clamp(),
+                                lod_min_clamp: level as f32,
+                                ..Default::default()
+                            }));
+
+                        let new_bind_group =
+                            create_model_bind_group(&context, &textures, &material_settings);
+
+                        *bind_group.borrow_mut() = new_bind_group;
+                    }
+                };
+
+                load_ktx2_async(context.context.clone(), srgb, &url, on_level_load).await
+            }
         },
         (Some("image/x.basis"), _) | (_, Some("basis")) => {
             log::error!("Loading .basis files is deprecated!");
@@ -750,11 +779,11 @@ impl Format {
     }
 }
 
-async fn load_ktx2_async(
-    context: &TextureLoadContext,
+async fn load_ktx2_async<F: Fn(u32) + 'static>(
+    context: Rc<ModelLoadContext>,
     srgb: bool,
     url: &Rc<url::Url>,
-    binding: &MaterialTexture,
+    on_level_load: F,
 ) -> anyhow::Result<Rc<Texture>> {
     // todo:
     // * At the moment it takes 3 round trips to load the first mip:
@@ -778,7 +807,6 @@ async fn load_ktx2_async(
     let mut header_bytes = [0; ktx2::Header::LENGTH];
 
     context
-        .context
         .request_client
         .fetch_uint8_array(url, Some(0..ktx2::Header::LENGTH), true)
         .await?
@@ -794,7 +822,6 @@ async fn load_ktx2_async(
     }
 
     let down_scaling_level = context
-        .context
         .performance_settings
         .max_texture_size
         .map(|size| downscaling_for_max_size(header.pixel_width.max(header.pixel_width), size))
@@ -806,7 +833,6 @@ async fn load_ktx2_async(
     {
         let mut reader = std::io::Cursor::new(
             context
-                .context
                 .request_client
                 .fetch_bytes(
                     url,
@@ -828,7 +854,7 @@ async fn load_ktx2_async(
         }
     }
 
-    let format = context.context.compressed_texture_format;
+    let format = context.compressed_texture_format;
 
     let downscaled_width = header.pixel_width >> down_scaling_level;
     let downscaled_height = header.pixel_height >> down_scaling_level;
@@ -851,20 +877,8 @@ async fn load_ktx2_async(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
     };
 
-    // Create a sampler that will only display mip levels from `level` onwards.
-    let sampler_descriptor = move |level, context: &ModelLoadContext| wgpu::SamplerDescriptor {
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
-        anisotropy_clamp: context.performance_settings.anisotropy_clamp(),
-        lod_min_clamp: (level - down_scaling_level) as f32,
-        ..Default::default()
-    };
-
     let texture = Rc::new(Texture::new(
-        context.context.device.create_texture(&texture_descriptor()),
+        context.device.create_texture(&texture_descriptor()),
     ));
 
     let mut levels = level_indices.into_iter().enumerate().rev();
@@ -874,12 +888,7 @@ async fn load_ktx2_async(
         let (i, level_index) = levels.next().unwrap();
 
         let url = Rc::clone(url);
-        let textures = Rc::clone(&context.textures);
-        let material_settings = Rc::clone(&context.material_settings);
-        let bind_group = Rc::clone(&context.bind_group);
-        let context = Rc::clone(&context.context);
         let texture = Rc::clone(&texture);
-        let sampler = Rc::clone(&binding.sampler);
 
         let transcoded = decompress_and_transcode(
             &url,
@@ -901,26 +910,13 @@ async fn load_ktx2_async(
             &texture_descriptor(),
         );
 
-        *sampler.borrow_mut() = Rc::new(
-            context
-                .device
-                .create_sampler(&sampler_descriptor(i as u32, &context)),
-        );
-
-        let new_bind_group = create_model_bind_group(&context, &textures, &material_settings);
-
-        *bind_group.borrow_mut() = new_bind_group;
+        on_level_load(i as u32 - down_scaling_level)
     }
 
     // Load all other mips in the background.
     wasm_bindgen_futures::spawn_local({
         let url = Rc::clone(url);
-        let textures = Rc::clone(&context.textures);
-        let material_settings = Rc::clone(&context.material_settings);
-        let bind_group = Rc::clone(&context.bind_group);
-        let context = Rc::clone(&context.context);
         let texture = Rc::clone(&texture);
-        let sampler = Rc::clone(&binding.sampler);
 
         async move {
             for (i, level_index) in levels {
@@ -948,16 +944,7 @@ async fn load_ktx2_async(
                     &texture_descriptor(),
                 );
 
-                *sampler.borrow_mut() = Rc::new(
-                    context
-                        .device
-                        .create_sampler(&sampler_descriptor(i as u32, &context)),
-                );
-
-                let new_bind_group =
-                    create_model_bind_group(&context, &textures, &material_settings);
-
-                *bind_group.borrow_mut() = new_bind_group;
+                on_level_load(i as u32 - down_scaling_level)
             }
         }
     });

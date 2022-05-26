@@ -406,11 +406,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .borrow_mut()
             .insert(model_url.as_str().to_string(), slot);
 
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Err(error) = load_model(model_url, slot, context, &models).await {
-                    log::error!("Failed to load model: {}", error);
-                }
-            });
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = load_model(model_url, slot, context, &models).await {
+                log::error!("Failed to load model: {}", error);
+            }
+        });
     }
 
     let hand_model = {
@@ -1253,71 +1253,79 @@ fn setup_callbacks(
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_handle_spawn".into())?.into();
 
     let handle_spawn = wasm_bindgen::closure::Closure::wrap(Box::new({
-        let handle_spawn_fallible = move |url: String, position: js_sys::Array| -> anyhow::Result<()> {
-            let position = glam::DVec3::new(
-                position.get(0).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
-                position.get(1).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
-                position.get(2).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
-            )
-            .as_vec3();
+        let handle_spawn_fallible =
+            move |url: String, position: js_sys::Array| -> anyhow::Result<()> {
+                let position = glam::DVec3::new(
+                    position
+                        .get(0)
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                    position
+                        .get(1)
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                    position
+                        .get(2)
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                )
+                .as_vec3();
 
-            let instance = Instance::new(position, 1.0, Default::default());
+                let instance = Instance::new(position, 1.0, Default::default());
 
-            let (slot, new_model) = match urls_to_model_slots.borrow().get(&url) {
-                Some(slot) => (*slot, false),
-                None => {
-                    let instances = vec![instance];
+                let (slot, new_model) = match urls_to_model_slots.borrow().get(&url) {
+                    Some(slot) => (*slot, false),
+                    None => {
+                        let instances = vec![instance];
 
-                    let slot = models.borrow_mut().insert(InstancedModel {
-                        model: None,
-                        instance_buffer: ResizingBuffer::new(
-                            &device,
-                            bytemuck::cast_slice(&instances),
-                            wgpu::BufferUsages::VERTEX,
-                        ),
-                        instances,
-                    });
+                        let slot = models.borrow_mut().insert(InstancedModel {
+                            model: None,
+                            instance_buffer: ResizingBuffer::new(
+                                &device,
+                                bytemuck::cast_slice(&instances),
+                                wgpu::BufferUsages::VERTEX,
+                            ),
+                            instances,
+                        });
 
-                    (slot, true)
-                }
-            };
-
-            if !new_model {
-                if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
-                    instanced_model.instances.push(instance);
-                    instanced_model.instance_buffer.write(
-                        &device,
-                        &queue,
-                        bytemuck::cast_slice(&instanced_model.instances),
-                    );
-                } else {
-                    log::warn!(
-                        "Spawn failed: no model found for slot {:?}, url '{}'",
-                        slot,
-                        url
-                    );
-                }
-            } else {
-                let model_url = url::Url::options()
-                    .base_url(Some(&href))
-                    .parse(&url)?;
-
-                urls_to_model_slots
-                    .borrow_mut()
-                    .insert(model_url.as_str().to_string(), slot);
-
-                let context = context.clone();
-                let models = models.clone();
-
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Err(error) = load_model(model_url, slot, context, &models).await {
-                        log::error!("Failed to load model: {}", error);
+                        (slot, true)
                     }
-                });
-            }
+                };
 
-            Ok(())
-        };
+                if !new_model {
+                    if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
+                        instanced_model.instances.push(instance);
+                        instanced_model.instance_buffer.write(
+                            &device,
+                            &queue,
+                            bytemuck::cast_slice(&instanced_model.instances),
+                        );
+                    } else {
+                        log::warn!(
+                            "Spawn failed: no model found for slot {:?}, url '{}'",
+                            slot,
+                            url
+                        );
+                    }
+                } else {
+                    let model_url = url::Url::options().base_url(Some(&href)).parse(&url)?;
+
+                    urls_to_model_slots
+                        .borrow_mut()
+                        .insert(model_url.as_str().to_string(), slot);
+
+                    let context = context.clone();
+                    let models = models.clone();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Err(error) = load_model(model_url, slot, context, &models).await {
+                            log::error!("Failed to load model: {}", error);
+                        }
+                    });
+                }
+
+                Ok(())
+            };
 
         move |url: String, position: js_sys::Array| {
             if let Err(error) = handle_spawn_fallible(url, position) {
@@ -2155,13 +2163,14 @@ pub fn append_break() {
 
 type Models = Rc<RefCell<slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>>>;
 
-async fn load_model(url: url::Url, slot: slotmap::DefaultKey, context: Rc<ModelLoadContext>, models: &Models) -> anyhow::Result<()> {
-    let bytes = context
-        .request_client
-        .fetch_bytes(&url, None)
-        .await?;
-    let model = load_gltf_from_bytes(&bytes, Some(url), &context)
-        .await?;
+async fn load_model(
+    url: url::Url,
+    slot: slotmap::DefaultKey,
+    context: Rc<ModelLoadContext>,
+    models: &Models,
+) -> anyhow::Result<()> {
+    let bytes = context.request_client.fetch_bytes(&url, None).await?;
+    let model = load_gltf_from_bytes(&bytes, Some(url), &context).await?;
 
     if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
         instanced_model.model = Some(model);
