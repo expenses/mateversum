@@ -29,8 +29,12 @@
                 return node;
             }
 
-            window.onerror = function (msg, url, linenumber) {
-                alert(`Error message: ${msg}\nURL: ${url}\nLine Number: ${linenumber}`);
+            window.onerror = function (msg, source, linenumber, colnumber, error) {
+                if (error instanceof EvalError || error instanceof SyntaxError) {
+                    console.log(msg, error);
+                } else {
+                    alert(`Error message: ${msg}\nURL: ${source}\nLine Number: ${linenumber}`);
+                }
                 return true;
             };
 
@@ -164,7 +168,7 @@
 
             window.send_xr_data = send_xr_data;
 
-            let handle_xr_data = (data, index) => {
+            let handle_xr_data = (data, peer_id) => {
                 console.log(`Got xr data but the handler was not set`);
             };
 
@@ -175,6 +179,25 @@
             window.set_xr_data_handler = (func) => {
                 handle_xr_data = func;
             };
+
+            const [send_spawn, get_spawn] = room.makeAction("spawn");
+
+            let handle_spawn = (url, location) => {
+                console.log(`Got spawn but handler was not set: ${url}, ${location}`)
+            };
+
+            get_spawn((data, peer_id) => {
+                handle_spawn(...data);
+            });
+
+            window.set_handle_spawn = (func) => {
+                handle_spawn = func;
+            };
+
+            window.spawn = (url, location) => {
+                handle_spawn(url, location);
+                send_spawn([url, location]);
+            }
 
             import init, { run } from "./pkg/mateversum.js";
             await init();
