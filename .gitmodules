@@ -4,3 +4,6 @@
 [submodule "rust-gpu-cli-builder"]
 	path = rust-gpu-cli-builder
 	url = https://github.com/expenses/rust-gpu-cli-builder
+[submodule "web/webxr-input-profiles"]
+	path = web/webxr-input-profiles
+	url = https://github.com/immersive-web/webxr-input-profiles/
