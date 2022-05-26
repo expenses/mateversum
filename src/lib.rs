@@ -371,7 +371,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         request_client,
     });
 
-    let models = Rc::new(RefCell::new(Vec::new()));
+    let models = Rc::new(RefCell::new(slotmap::SlotMap::new()));
+    let urls_to_model_slots = Rc::new(RefCell::new(HashMap::new()));
 
     // Deduplicate model references with the same url so they get treated as instances of the same model.
 
@@ -390,26 +391,26 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let models = Rc::clone(&models);
         let context = Rc::clone(&context);
         let device = Rc::clone(&device);
-        wasm_bindgen_futures::spawn_local(async move {
-            let bytes = context
-                .request_client
-                .fetch_bytes(&model_url, None)
-                .await
-                .unwrap();
-            let model = load_gltf_from_bytes(&bytes, Some(model_url.clone()), &context)
-                .await
-                .unwrap();
 
-            models.borrow_mut().push(InstancedModel {
-                model,
-                instance_buffer: ResizingBuffer::new(
-                    &device,
-                    bytemuck::cast_slice(&instances),
-                    wgpu::BufferUsages::VERTEX,
-                ),
-                instances,
-            });
+        let slot = models.borrow_mut().insert(InstancedModel {
+            model: None,
+            instance_buffer: ResizingBuffer::new(
+                &device,
+                bytemuck::cast_slice(&instances),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            instances,
         });
+
+        urls_to_model_slots
+            .borrow_mut()
+            .insert(model_url.as_str().to_string(), slot);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Err(error) = load_model(model_url, slot, context, &models).await {
+                    log::error!("Failed to load model: {}", error);
+                }
+            });
     }
 
     let hand_model = {
@@ -459,16 +460,13 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .await
             .map_err(|err| err.to_string())?;
 
-        let instances = vec![model_ref.as_instance()];
-
-        Some(InstancedModel {
+        Some(SingleModel {
             model,
-            instance_buffer: ResizingBuffer::new(
-                &device,
-                bytemuck::cast_slice(&instances),
-                wgpu::BufferUsages::VERTEX,
-            ),
-            instances,
+            instance_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&model_ref.as_instance()),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
         })
     } else {
         None
@@ -490,23 +488,20 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .await
             .map_err(|err| err.to_string())?;
 
-        let instances = vec![Instance::default()];
-
-        InstancedModel {
+        SingleModel {
             model,
-            instance_buffer: ResizingBuffer::new(
-                &device,
-                bytemuck::cast_slice(&instances),
-                wgpu::BufferUsages::VERTEX,
-            ),
-            instances,
+            instance_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&Instance::default()),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
         }
     };
 
     let send_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())?.into();
 
-    let player_states = Rc::new(RefCell::new(std::collections::HashMap::new()));
+    let player_states = Rc::new(RefCell::new(HashMap::new()));
     let movement = Rc::new(RefCell::new(None));
 
     setup_callbacks(
@@ -514,6 +509,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &reference_space,
         player_states.clone(),
         movement.clone(),
+        models.clone(),
+        urls_to_model_slots.clone(),
+        device.clone(),
+        queue.clone(),
+        href.clone(),
+        context.clone(),
     )?;
 
     let mut player_heads_buffer =
@@ -904,45 +905,45 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         let model_bind_groups = ModelBindGroups {
             pbr_opaque: models
-                .iter()
+                .values()
                 .map(|model| {
                     model
                         .model
-                        .opaque_primitives
                         .iter()
+                        .flat_map(|model| &model.opaque_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
                 .collect(),
             pbr_alpha_clipped: models
-                .iter()
+                .values()
                 .map(|model| {
                     model
                         .model
-                        .alpha_clipped_primitives
                         .iter()
+                        .flat_map(|model| &model.alpha_clipped_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
                 .collect(),
             unlit_opaque: models
-                .iter()
+                .values()
                 .map(|model| {
                     model
                         .model
-                        .unlit_opaque_primitives
                         .iter()
+                        .flat_map(|model| &model.unlit_opaque_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
                 .collect(),
             unlit_alpha_clipped: models
-                .iter()
+                .values()
                 .map(|model| {
                     model
                         .model
-                        .unlit_alpha_clipped_primitives
                         .iter()
+                        .flat_map(|model| &model.unlit_alpha_clipped_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
@@ -1027,17 +1028,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         if let Some(mirror_model) = &mirror_model {
             render_pass.set_stencil_reference(1);
 
-            {
-                render_pass.set_pipeline(&pipelines.stencil_write);
+            render_pass.set_pipeline(&pipelines.stencil_write);
 
-                bind_model_buffers(&mut render_pass, &mirror_model.model);
-                render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
-                render_pass.draw_indexed(
-                    0..mirror_model.model.num_indices,
-                    0,
-                    0..mirror_model.instances.len() as u32,
-                );
-            }
+            bind_model_buffers(&mut render_pass, &mirror_model.model);
+            render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.slice(..));
+            render_pass.draw_indexed(0..mirror_model.model.num_indices, 0, 0..1);
 
             render_pass.set_bind_group(2, &mirror_uniform_bind_group, &[]);
 
@@ -1091,12 +1086,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 render_pass.set_pipeline(&pipelines.set_depth);
 
                 bind_model_buffers(&mut render_pass, &mirror_model.model);
-                render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.inner.slice(..));
-                render_pass.draw_indexed(
-                    0..mirror_model.model.num_indices,
-                    0,
-                    0..mirror_model.instances.len() as u32,
-                );
+                render_pass.set_vertex_buffer(3, mirror_model.instance_buffer.slice(..));
+                render_pass.draw_indexed(0..mirror_model.model.num_indices, 0, 0..1);
             }
         }
 
@@ -1150,15 +1141,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             render_pass.set_pipeline(&pipelines.ui);
 
             bind_model_buffers(&mut render_pass, &ui_plane_model.model);
-            render_pass.set_vertex_buffer(3, ui_plane_model.instance_buffer.inner.slice(..));
+            render_pass.set_vertex_buffer(3, ui_plane_model.instance_buffer.slice(..));
 
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
 
-            render_pass.draw_indexed(
-                0..ui_plane_model.model.num_indices,
-                0,
-                0..ui_plane_model.instances.len() as u32,
-            );
+            render_pass.draw_indexed(0..ui_plane_model.model.num_indices, 0, 0..1);
         }
 
         drop(render_pass);
@@ -1195,14 +1182,20 @@ fn setup_callbacks(
     reference_space: &web_sys::XrReferenceSpace,
     player_states: Rc<RefCell<HashMap<String, PlayerState>>>,
     movement: Rc<RefCell<Option<Vec3>>>,
+    models: Rc<RefCell<slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>>>,
+    urls_to_model_slots: Rc<RefCell<HashMap<String, slotmap::DefaultKey>>>,
+    device: Rc<wgpu::Device>,
+    queue: Rc<wgpu::Queue>,
+    href: url::Url,
+    context: Rc<ModelLoadContext>,
 ) -> Result<(), wasm_bindgen::JsValue> {
     let setup_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_xr_data_handler".into())?.into();
 
     let on_message = {
-        let player_states = Rc::clone(&player_states);
+        wasm_bindgen::closure::Closure::wrap(Box::new({
+            let player_states = Rc::clone(&player_states);
 
-        wasm_bindgen::closure::Closure::wrap(Box::new(
             move |uint8: js_sys::Uint8Array, peer_id: String| {
                 let mut bytes = [0; 96];
                 uint8.copy_to(&mut bytes);
@@ -1219,8 +1212,8 @@ fn setup_callbacks(
                 } else {
                     log::info!("Got {} bytes; ignoring", bytes.len());
                 }
-            },
-        )
+            }
+        })
             as Box<dyn FnMut(js_sys::Uint8Array, String)>)
     };
 
@@ -1230,6 +1223,91 @@ fn setup_callbacks(
     )?;
     // We need do this this as otherwise `on_message` is dropped when `run()` finishes.
     on_message.forget();
+
+    let spawn_setup_fn: js_sys::Function =
+        js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_handle_spawn".into())?.into();
+
+    let handle_spawn = wasm_bindgen::closure::Closure::wrap(Box::new({
+        let handle_spawn_fallible = move |url: String, position: js_sys::Array| -> anyhow::Result<()> {
+            let position = glam::DVec3::new(
+                position.get(0).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                position.get(1).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                position.get(2).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+            )
+            .as_vec3();
+
+            let instance = Instance::new(position, 1.0, Default::default());
+
+            let (slot, new_model) = match urls_to_model_slots.borrow().get(&url) {
+                Some(slot) => (*slot, false),
+                None => {
+                    let instances = vec![instance];
+
+                    let slot = models.borrow_mut().insert(InstancedModel {
+                        model: None,
+                        instance_buffer: ResizingBuffer::new(
+                            &device,
+                            bytemuck::cast_slice(&instances),
+                            wgpu::BufferUsages::VERTEX,
+                        ),
+                        instances,
+                    });
+
+                    (slot, true)
+                }
+            };
+
+            if !new_model {
+                if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
+                    instanced_model.instances.push(instance);
+                    instanced_model.instance_buffer.write(
+                        &device,
+                        &queue,
+                        bytemuck::cast_slice(&instanced_model.instances),
+                    );
+                } else {
+                    log::warn!(
+                        "Spawn failed: no model found for slot {:?}, url '{}'",
+                        slot,
+                        url
+                    );
+                }
+            } else {
+                let model_url = url::Url::options()
+                    .base_url(Some(&href))
+                    .parse(&url)?;
+
+                urls_to_model_slots
+                    .borrow_mut()
+                    .insert(model_url.as_str().to_string(), slot);
+
+                let context = context.clone();
+                let models = models.clone();
+
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Err(error) = load_model(model_url, slot, context, &models).await {
+                        log::error!("Failed to load model: {}", error);
+                    }
+                });
+            }
+
+            Ok(())
+        };
+
+        move |url: String, position: js_sys::Array| {
+            if let Err(error) = handle_spawn_fallible(url, position) {
+                log::error!("Failed to spawn: {}", error);
+            }
+        }
+    })
+        as Box<dyn FnMut(String, js_sys::Array)>);
+
+    spawn_setup_fn.call1(
+        &wasm_bindgen::JsValue::undefined(),
+        handle_spawn.as_ref().unchecked_ref(),
+    )?;
+
+    handle_spawn.forget();
 
     let on_select_start_closure = wasm_bindgen::closure::Closure::wrap(Box::new({
         let reference_space = reference_space.clone();
@@ -1457,22 +1535,24 @@ struct HeadOrHandsRenderingData<'a> {
 
 fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
     render_pass: &mut wgpu::RenderPass<'a>,
-    models: &'a [InstancedModel],
+    models: &'a slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>,
     primitives_getter: F,
     bind_groups: &'a [Vec<std::cell::Ref<wgpu::BindGroup>>],
     heads: &HeadOrHandsRenderingData<'a>,
     hands: &HeadOrHandsRenderingData<'a>,
 ) {
-    for (model_index, model) in models.iter().enumerate() {
-        bind_model_buffers(render_pass, &model.model);
-        render_pass.set_vertex_buffer(3, model.instance_buffer.inner.slice(..));
+    for (model_index, instanced_model) in models.values().enumerate() {
+        if let Some(model) = &instanced_model.model {
+            bind_model_buffers(render_pass, model);
+            render_pass.set_vertex_buffer(3, instanced_model.instance_buffer.inner.slice(..));
 
-        render_primitives(
-            render_pass,
-            primitives_getter(&model.model),
-            &bind_groups[model_index],
-            0..model.instances.len() as u32,
-        );
+            render_primitives(
+                render_pass,
+                primitives_getter(model),
+                &bind_groups[model_index],
+                0..instanced_model.instances.len() as u32,
+            );
+        }
     }
 
     bind_model_buffers(render_pass, heads.model);
@@ -1496,8 +1576,13 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
     );
 }
 
-struct InstancedModel {
+struct SingleModel {
     model: assets::Model,
+    instance_buffer: wgpu::Buffer,
+}
+
+struct InstancedModel {
+    model: Option<assets::Model>,
     instances: Vec<Instance>,
     instance_buffer: ResizingBuffer,
 }
@@ -2001,4 +2086,21 @@ pub fn append_break() {
         .unwrap();
 
     body.append_child(&web_sys::Element::from(br)).unwrap();
+}
+
+type Models = Rc<RefCell<slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>>>;
+
+async fn load_model(url: url::Url, slot: slotmap::DefaultKey, context: Rc<ModelLoadContext>, models: &Models) -> anyhow::Result<()> {
+    let bytes = context
+        .request_client
+        .fetch_bytes(&url, None)
+        .await?;
+    let model = load_gltf_from_bytes(&bytes, Some(url), &context)
+        .await?;
+
+    if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
+        instanced_model.model = Some(model);
+    }
+
+    Ok(())
 }

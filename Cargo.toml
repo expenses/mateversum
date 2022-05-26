@@ -39,6 +39,7 @@ serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 egui-wgpu = { git = "https://github.com/expenses/egui", branch = "fixes" }
 egui = { git = "https://github.com/expenses/egui", branch = "fixes" }
+slotmap = "1.0.6"
 
 [dependencies.web-sys]
 version = "0.3.57"
