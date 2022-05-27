@@ -5,7 +5,7 @@
     no_std
 )]
 
-use shared_structs::{MaterialSettings, MirrorUniforms, Uniforms};
+use shared_structs::{MaterialSettings, MirrorUniforms, SkyboxUniforms, Uniforms};
 use spirv_std::{
     glam::{self, Mat3, Vec2, Vec3, Vec4},
     num_traits::Float,
@@ -339,11 +339,11 @@ fn compute_cotangent_frame(normal: Vec3, position: Vec3, uv: Vec2) -> Mat3 {
 
 #[spirv(vertex)]
 pub fn fullscreen_tri(
-    #[spirv(vertex_index)] vert_idx: i32,
+    #[spirv(vertex_index)] vertex_index: i32,
     uv: &mut Vec2,
     #[spirv(position)] builtin_pos: &mut Vec4,
 ) {
-    *uv = Vec2::new(((vert_idx << 1) & 2) as f32, (vert_idx & 2) as f32);
+    *uv = Vec2::new(((vertex_index << 1) & 2) as f32, (vertex_index & 2) as f32);
     let pos = 2.0 * *uv - Vec2::ONE;
 
     *builtin_pos = Vec4::new(pos.x, pos.y, 0.0, 1.0);
@@ -447,4 +447,64 @@ pub fn tonemap(
     let linear = aces_filmic(sample.truncate());
 
     *output = linear_to_srgb(linear).extend(1.0)
+}
+
+#[spirv(vertex)]
+pub fn vertex_skybox(
+    #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    ray: &mut Vec3,
+) {
+    // https://github.com/gfx-rs/wgpu/blob/9114283707a8b472412cf4fe685d364327d3a5b4/wgpu/examples/skybox/shader.wgsl#L21
+    let pos = Vec4::new(
+        (vertex_index / 2) as f32 * 4.0 - 1.0,
+        (vertex_index & 1) as f32 * 4.0 - 1.0,
+        1.0,
+        1.0,
+    );
+
+    let unprojected: Vec4 = glam::Mat4::from(skybox_uniforms.left_projection_inverse) * pos;
+
+    *ray = glam::Quat::from_vec4(skybox_uniforms.left_view_inverse) * unprojected.truncate();
+
+    *builtin_pos = pos;
+}
+
+#[spirv(vertex)]
+pub fn vertex_skybox_mirrored(
+    #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
+    #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    ray: &mut Vec3,
+) {
+    // https://github.com/gfx-rs/wgpu/blob/9114283707a8b472412cf4fe685d364327d3a5b4/wgpu/examples/skybox/shader.wgsl#L21
+    let pos = Vec4::new(
+        (vertex_index / 2) as f32 * 4.0 - 1.0,
+        (vertex_index & 1) as f32 * 4.0 - 1.0,
+        1.0,
+        1.0,
+    );
+
+    let unprojected: Vec4 = glam::Mat4::from(skybox_uniforms.left_projection_inverse) * pos;
+
+    *ray = shared_structs::reflect(
+        glam::Quat::from_vec4(skybox_uniforms.left_view_inverse) * unprojected.truncate(),
+        mirror_uniforms.normal,
+    );
+
+    *builtin_pos = pos;
+}
+
+#[spirv(fragment)]
+pub fn fragment_skybox(
+    ray: Vec3,
+    #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 3)] environment_map: &Image!(cube, type=f32, sampled),
+    output: &mut Vec4,
+) {
+    let sample: Vec4 = environment_map.sample_by_lod(*sampler, ray, 0.0);
+
+    *output = sample;
 }

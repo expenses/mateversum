@@ -31,6 +31,15 @@ impl Uniforms {
     }
 }
 
+#[cfg_attr(not(target_arch = "spirv"), derive(crevice::std140::AsStd140))]
+#[repr(C)]
+pub struct SkyboxUniforms {
+    pub left_projection_inverse: FlatMat4,
+    pub right_projection_inverse: FlatMat4,
+    pub left_view_inverse: Vec4,
+    pub right_view_inverse: Vec4,
+}
+
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(not(target_arch = "spirv"), derive(AsStd140))]
 pub struct FlatMat4 {

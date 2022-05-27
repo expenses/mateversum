@@ -779,7 +779,7 @@ impl Format {
     }
 }
 
-async fn load_ktx2_async<F: Fn(u32) + 'static>(
+pub(crate) async fn load_ktx2_async<F: Fn(u32) + 'static>(
     context: Rc<ModelLoadContext>,
     srgb: bool,
     url: &Rc<url::Url>,
@@ -1007,6 +1007,177 @@ async fn decompress_and_transcode(
                 .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
         })
         .await?
+}
+
+pub(crate) async fn load_ktx2_cubemap(
+    context: Rc<ModelLoadContext>,
+    url: &Rc<url::Url>,
+) -> anyhow::Result<Rc<Texture>> {
+    let mut header_bytes = [0; ktx2::Header::LENGTH];
+
+    context
+        .request_client
+        .fetch_uint8_array(url, Some(0..ktx2::Header::LENGTH), true)
+        .await?
+        .copy_to(&mut header_bytes);
+
+    let header = ktx2::Header::from_bytes(&header_bytes)?;
+
+    if header.face_count != 6 {
+        return Err(anyhow::anyhow!(
+            "Expected 6 faces, got {}",
+            header.face_count
+        ));
+    }
+
+    if header.format != Some(ktx2::Format::BC6H_UFLOAT_BLOCK) {
+        return Err(anyhow::anyhow!(
+            "Got an unsupported format: {:?}",
+            header.format
+        ));
+    }
+
+    if header.supercompression_scheme != Some(ktx2::SupercompressionScheme::Zstandard) {
+        return Err(anyhow::anyhow!(
+            "Got an unsupported supercompression scheme: {:?}",
+            header.supercompression_scheme
+        ));
+    }
+
+    let mut level_indices = Vec::with_capacity(header.level_count as usize);
+
+    {
+        let mut reader = std::io::Cursor::new(
+            context
+                .request_client
+                .fetch_bytes(
+                    url,
+                    Some(
+                        ktx2::Header::LENGTH
+                            ..ktx2::Header::LENGTH
+                                + ktx2::LevelIndex::LENGTH * header.level_count as usize,
+                    ),
+                )
+                .await?,
+        );
+
+        for _ in 0..header.level_count {
+            let mut level_index_bytes = [0; ktx2::LevelIndex::LENGTH];
+
+            reader.read_exact(&mut level_index_bytes)?;
+
+            level_indices.push(ktx2::LevelIndex::from_bytes(&level_index_bytes));
+        }
+    }
+
+    let texture_descriptor = move || wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            // Compressed textures made made of 4x4 blocks, so there are some issues
+            // with textures that don't have a side length divisible by 4.
+            // They're considered fine everywhere except D3D11 and old versions of D3D12
+            // (according to jasperrlz in the Wgpu Users element chat).
+            width: header.pixel_width - (header.pixel_width % 4),
+            height: header.pixel_height - (header.pixel_height % 4),
+            depth_or_array_layers: 6,
+        },
+        mip_level_count: header.level_count,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bc6hRgbUfloat,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    };
+
+    let texture = context.device.create_texture(&texture_descriptor());
+
+    let texture = Rc::new(Texture {
+        view: texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        }),
+        texture,
+    });
+
+    let mut levels = level_indices.into_iter().enumerate().rev();
+
+    // Load the smallest (1x1 pixel) mip first before returning the texture
+    {
+        let (i, level_index) = levels.next().unwrap();
+
+        let url = Rc::clone(url);
+        let texture = Rc::clone(&texture);
+
+        let bytes = context
+            .request_client
+            .fetch_bytes(
+                &url,
+                Some(
+                    level_index.byte_offset as usize
+                        ..(level_index.byte_offset + level_index.byte_length) as usize,
+                ),
+            )
+            .await
+            .unwrap();
+
+        let decompressed = match header.supercompression_scheme {
+            Some(ktx2::SupercompressionScheme::Zstandard) => {
+                zstd::bulk::decompress(&bytes, level_index.uncompressed_byte_length as usize)
+                    .unwrap()
+            }
+            Some(other) => panic!("Unsupported: {:?}", other),
+            None => bytes.to_vec(),
+        };
+
+        write_bytes_to_texture(
+            &context.queue,
+            &texture.texture,
+            i as u32,
+            &decompressed,
+            &texture_descriptor(),
+        );
+    }
+
+    // Load all other mips in the background.
+    wasm_bindgen_futures::spawn_local({
+        let url = Rc::clone(url);
+        let texture = Rc::clone(&texture);
+
+        async move {
+            for (i, level_index) in levels {
+                let bytes = context
+                    .request_client
+                    .fetch_bytes(
+                        &url,
+                        Some(
+                            level_index.byte_offset as usize
+                                ..(level_index.byte_offset + level_index.byte_length) as usize,
+                        ),
+                    )
+                    .await
+                    .unwrap();
+
+                let decompressed = match header.supercompression_scheme {
+                    Some(ktx2::SupercompressionScheme::Zstandard) => zstd::bulk::decompress(
+                        &bytes,
+                        level_index.uncompressed_byte_length as usize,
+                    )
+                    .unwrap(),
+                    Some(other) => panic!("Unsupported: {:?}", other),
+                    None => bytes.to_vec(),
+                };
+
+                write_bytes_to_texture(
+                    &context.queue,
+                    &texture.texture,
+                    i as u32,
+                    &decompressed,
+                    &texture_descriptor(),
+                );
+            }
+        }
+    });
+
+    Ok(texture)
 }
 
 pub(crate) fn load_single_pixel_image(
