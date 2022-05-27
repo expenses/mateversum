@@ -527,14 +527,17 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     .await
     .map_err(|err| err.to_string())?;
 
-    let diffuse_ibl_cubemap = assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.diffuse_ibl_cubemap.clone()))
-    .await
-    .map_err(|err| err.to_string())?;
-
-    let specular_ibl_cubemap =
-        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.specular_ibl_cubemap.clone()))
+    let diffuse_ibl_cubemap =
+        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.diffuse_ibl_cubemap.clone()))
             .await
             .map_err(|err| err.to_string())?;
+
+    let specular_ibl_cubemap = assets::load_ktx2_cubemap(
+        context.clone(),
+        &Rc::new(world.specular_ibl_cubemap.clone()),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
 
     let send_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())?.into();
