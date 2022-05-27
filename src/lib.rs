@@ -291,6 +291,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             sampler_entry(1),
             texture_entry(2),
             cubemap_entry(3),
+            cubemap_entry(4),
         ],
     });
 
@@ -526,8 +527,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     .await
     .map_err(|err| err.to_string())?;
 
-    let environment_map =
-        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.environment_map.clone()))
+    let diffuse_ibl_cubemap = assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.diffuse_ibl_cubemap.clone()))
+    .await
+    .map_err(|err| err.to_string())?;
+
+    let specular_ibl_cubemap =
+        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.specular_ibl_cubemap.clone()))
             .await
             .map_err(|err| err.to_string())?;
 
@@ -589,7 +594,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(&environment_map.view),
+                resource: wgpu::BindingResource::TextureView(&diffuse_ibl_cubemap.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&specular_ibl_cubemap.view),
             },
         ],
     });
@@ -1705,7 +1714,9 @@ struct World {
     #[serde(deserialize_with = "deserialize_relative_url")]
     ibl_lut: url::Url,
     #[serde(deserialize_with = "deserialize_relative_url")]
-    environment_map: url::Url,
+    diffuse_ibl_cubemap: url::Url,
+    #[serde(deserialize_with = "deserialize_relative_url")]
+    specular_ibl_cubemap: url::Url,
 }
 
 #[derive(serde::Deserialize)]

@@ -501,10 +501,10 @@ pub fn vertex_skybox_mirrored(
 pub fn fragment_skybox(
     ray: Vec3,
     #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
-    #[spirv(descriptor_set = 0, binding = 3)] environment_map: &Image!(cube, type=f32, sampled),
+    #[spirv(descriptor_set = 0, binding = 4)] specular_ibl_cubemap: &Image!(cube, type=f32, sampled),
     output: &mut Vec4,
 ) {
-    let sample: Vec4 = environment_map.sample_by_lod(*sampler, ray, 0.0);
+    let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, 0.0);
 
     *output = sample;
 }
