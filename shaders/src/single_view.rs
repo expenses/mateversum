@@ -162,5 +162,5 @@ pub fn tonemap(
 
     let linear = aces_filmic(sample.truncate());
 
-    *output = linear_to_srgb(linear).extend(1.0)
+    *output = linear_to_srgb_approx(linear).extend(1.0)
 }

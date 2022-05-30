@@ -5,11 +5,10 @@
     no_std
 )]
 
-use glam_pbr::PerceptualRoughness;
 use shared_structs::{MaterialSettings, MirrorUniforms, SkyboxUniforms, Uniforms};
 use spirv_std::{
-    glam::{self, Mat3, Vec2, Vec3, Vec4, Vec4Swizzles},
-    num_traits::{Float, Pow},
+    glam::{self, Mat3, Vec2, Vec3, Vec4},
+    num_traits::Float,
     Image, Sampler,
 };
 
@@ -88,7 +87,7 @@ impl ExtendedMaterialParams {
 
         Self {
             base: glam_pbr::MaterialParams {
-                diffuse_colour: diffuse.truncate(),
+                albedo_colour: diffuse.truncate(),
                 metallic,
                 perceptual_roughness: glam_pbr::PerceptualRoughness(roughness),
                 index_of_refraction: glam_pbr::IndexOfRefraction::default(),
@@ -142,50 +141,43 @@ pub fn fragment(
     let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
+    let view = glam_pbr::View(view_vector);
 
-    let brdf_params = glam_pbr::BasicBrdfParams {
+    let lut_values = glam_pbr::ggx_lut_lookup(
         normal,
-        light: glam_pbr::Light(Vec3::ONE.normalize()),
-        light_intensity: Vec3::ONE,
-        view: glam_pbr::View(view_vector),
-        material_params: material_params.base,
-    };
-
-    let mut result = glam_pbr::basic_brdf(brdf_params);
-
-    result.diffuse = Default::default();
-    result.specular = Default::default();
-
-    let ggx_lut_sampler = |normal_dot_view: f32, perceptual_roughness: PerceptualRoughness| {
-        let uv = Vec2::new(normal_dot_view, perceptual_roughness.0);
-
-        let sample: Vec4 = ibl_lut.sample_by_lod(*sampler, uv, 0.0);
-
-        sample.xy()
-    };
-
-    result.diffuse += getIBLRadianceLambertian(
-        normal.0,
-        view_vector,
+        view,
         material_params.base,
-        ggx_lut_sampler,
+        |normal_dot_view: f32, perceptual_roughness: glam_pbr::PerceptualRoughness| {
+            let uv = Vec2::new(normal_dot_view, perceptual_roughness.0);
+            let sample: Vec4 = ibl_lut.sample_by_lod(*sampler, uv, 0.0);
+            Vec2::new(sample.x, sample.y)
+        },
+    );
+
+    let diffuse_output = glam_pbr::ibl_irradiance_lambertian(
+        normal,
+        view,
+        material_params.base,
+        lut_values,
         |normal| {
             let sample: Vec4 = diffuse_ibl_cubemap.sample_by_lod(*sampler, normal, 0.0);
             sample.truncate()
         },
     );
-    result.diffuse += getIBLRadianceGGX(
-        normal.0,
-        view_vector,
-        material_params.base.perceptual_roughness,
-        calculate_combined_f0(material_params.base),
-        material_params.base.specular_factor,
-        *sampler,
-        specular_ibl_cubemap,
-        ggx_lut_sampler,
+
+    let specular_output = glam_pbr::get_ibl_radiance_ggx(
+        normal,
+        view,
+        material_params.base,
+        lut_values,
+        9,
+        |ray, lod| {
+            let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, lod);
+            sample.truncate()
+        },
     );
 
-    *output = (result.diffuse + result.specular + material_params.emission).extend(1.0);
+    *output = (diffuse_output + specular_output + material_params.emission).extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -277,7 +269,7 @@ pub fn fragment_unlit(
         &material_settings,
     );
 
-    *output = material_params.base.diffuse_colour.extend(1.0);
+    *output = material_params.base.albedo_colour.extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -328,14 +320,12 @@ pub fn fragment_unlit_alpha_clipped(
         spirv_std::arch::kill();
     }
 
-    *output = material_params.base.diffuse_colour.extend(1.0);
+    *output = material_params.base.albedo_colour.extend(1.0);
 }
 
-fn linear_to_srgb(color_linear: Vec3) -> Vec3 {
-    let selector = (color_linear - 0.0031308).ceil(); // 0 if under value, 1 if over
-    let under = 12.92 * color_linear;
-    let over = 1.055 * color_linear.powf(0.41666) - 0.055;
-    under * selector + over * (1.0 - selector)
+fn linear_to_srgb_approx(color_linear: Vec3) -> Vec3 {
+    let gamma = 2.2;
+    color_linear.powf(1.0 / gamma)
 }
 
 fn calculate_normal(
@@ -433,15 +423,18 @@ pub fn vertex_mirrored(
     let instance_translation = instance_translation_and_scale.truncate();
 
     let position = instance_translation + (instance_rotation * instance_scale * position);
-    *builtin_pos = uniforms.projection_view(view_index)
-        * shared_structs::reflect_in_mirror(
-            position,
-            mirror_uniforms.position,
-            mirror_uniforms.normal,
-        )
-        .extend(1.0);
+    let position = shared_structs::reflect_in_mirror(
+        position,
+        mirror_uniforms.position,
+        mirror_uniforms.normal,
+    );
+
+    let normal = instance_rotation * normal;
+    let normal = shared_structs::reflect(normal, mirror_uniforms.normal);
+
+    *builtin_pos = uniforms.projection_view(view_index) * position.extend(1.0);
     *out_position = position;
-    *out_normal = instance_rotation * normal;
+    *out_normal = normal;
     *out_uv = uv;
 }
 
@@ -462,7 +455,7 @@ fn aces_filmic(x: Vec3) -> Vec3 {
     let c = 2.43;
     let d = 0.59;
     let e = 0.14;
-    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+    saturate((x * (a * x + b)) / (x * (c * x + d) + e))
 }
 
 #[spirv(fragment)]
@@ -482,7 +475,7 @@ pub fn tonemap(
 
     let linear = aces_filmic(sample.truncate());
 
-    *output = linear_to_srgb(linear).extend(1.0)
+    *output = linear_to_srgb_approx(linear).extend(1.0)
 }
 
 #[spirv(vertex)]
@@ -542,80 +535,5 @@ pub fn fragment_skybox(
 ) {
     let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, 0.0);
 
-    *output = sample;
-}
-
-fn getIBLRadianceLambertian<
-    GSamp: Fn(f32, PerceptualRoughness) -> Vec2,
-    DSamp: Fn(Vec3) -> Vec3,
->(
-    n: Vec3,
-    v: Vec3,
-    material_params: glam_pbr::MaterialParams,
-    ggx_lut_sampler: GSamp,
-    diffuse_cubemap_sampler: DSamp,
-) -> Vec3 {
-    let F0 = calculate_combined_f0(material_params);
-
-    let NdotV = n.dot(v).max(0.0);
-    let f_ab = ggx_lut_sampler(NdotV, material_params.perceptual_roughness);
-
-    let irradiance = diffuse_cubemap_sampler(n);
-
-    let specularWeight = material_params.specular_factor;
-
-    // see https://bruop.github.io/ibl/#single_scattering_results at Single Scattering Results
-    // Roughness dependent fresnel, from Fdez-Aguera
-
-    let Fr = Vec3::splat(1.0 - material_params.perceptual_roughness.0).max(F0) - F0;
-    let fresnel_schlick = F0 + Fr * (1.0 - NdotV).pow(5.0);
-    let FssEss = specularWeight * fresnel_schlick * f_ab.x + f_ab.y; // <--- GGX / specular light contribution (scale it down if the specularWeight is low)
-
-    // Multiple scattering, from Fdez-Aguera
-    let Ems = 1.0 - (f_ab.x + f_ab.y);
-    let F_avg = specularWeight * (F0 + (1.0 - F0) / 21.0);
-    let FmsEms = Ems * FssEss * F_avg / (1.0 - F_avg * Ems);
-    let k_D = material_params.diffuse_colour * (1.0 - FssEss + FmsEms); // we use +FmsEms as indicated by the formula in the blog post (might be a typo in the implementation)
-
-    (FmsEms + k_D) * irradiance
-}
-
-fn getIBLRadianceGGX<GSamp: Fn(f32, PerceptualRoughness) -> Vec2>(
-    n: Vec3,
-    v: Vec3,
-    roughness: PerceptualRoughness,
-    F0: Vec3,
-    specularWeight: f32,
-    sampler: Sampler,
-    specular_ibl_cubemap: &Image!(cube, type=f32, sampled),
-    ggx_lut_sampler: GSamp,
-) -> Vec3 {
-    let u_MipCount = 9;
-
-    let NdotV = n.dot(v).max(0.0);
-    let lod = roughness.0 * (u_MipCount - 1) as f32;
-    let reflection = shared_structs::reflect(-v, n).normalize();
-
-    let f_ab = ggx_lut_sampler(NdotV, roughness);
-    let specularSample = {
-        let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(sampler, reflection, lod);
-        sample
-    };
-
-    let specularLight = specularSample.truncate();
-
-    // see https://bruop.github.io/ibl/#single_scattering_results at Single Scattering Results
-    // Roughness dependent fresnel, from Fdez-Aguera
-    let Fr = Vec3::splat(1.0 - roughness.0).max(F0) - F0;
-    let fresnel_schlick = F0 + Fr * (1.0 - NdotV).pow(5.0);
-    let FssEss = fresnel_schlick * f_ab.x + f_ab.y;
-
-    specularWeight * specularLight * FssEss
-}
-
-fn calculate_combined_f0(material: glam_pbr::MaterialParams) -> Vec3 {
-    let dielectric_specular_f0 = material.index_of_refraction.to_dielectric_f0()
-        * material.specular_colour
-        * material.specular_factor;
-    dielectric_specular_f0.lerp(material.diffuse_colour, material.metallic)
+    *output = sample.truncate().extend(1.0);
 }

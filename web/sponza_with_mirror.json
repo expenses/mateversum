@@ -35,7 +35,7 @@
         0.0
     ]
   },
-  "ibl_lut": "environment_maps/forest_ggx_lut.ktx2",
-  "specular_ibl_cubemap": "environment_maps/forest_specular_cubemap_ggx.ktx2",
-  "diffuse_ibl_cubemap": "environment_maps/forest_diffuse_cubemap_lambertian.ktx2"
+  "ibl_lut": "environment_maps/lut_ggx.ktx2",
+  "specular_ibl_cubemap": "environment_maps/helipad/specular_compressed.ktx2",
+  "diffuse_ibl_cubemap": "environment_maps/helipad/diffuse_compressed.ktx2"
 }
