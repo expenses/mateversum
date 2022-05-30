@@ -186,7 +186,10 @@ pub fn fragment_alpha_clipped(
     normal: Vec3,
     uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
-    #[spirv(descriptor_set = 0, binding = 1)] _sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 2)] ibl_lut: &SampledImage,
+    #[spirv(descriptor_set = 0, binding = 3)] diffuse_ibl_cubemap: &Image!(cube, type=f32, sampled),
+    #[spirv(descriptor_set = 0, binding = 4)] specular_ibl_cubemap: &Image!(cube, type=f32, sampled),
     #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
@@ -218,23 +221,48 @@ pub fn fragment_alpha_clipped(
     let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
+    let view = glam_pbr::View(view_vector);
 
     // We can only do this after we've sampled all textures for naga control flow reasons.
     if material_params.alpha < 0.5 {
         spirv_std::arch::kill();
     }
 
-    let brdf_params = glam_pbr::BasicBrdfParams {
+    let lut_values = glam_pbr::ggx_lut_lookup(
         normal,
-        light: glam_pbr::Light(Vec3::ONE.normalize()),
-        light_intensity: Vec3::ONE,
-        view: glam_pbr::View(view_vector),
-        material_params: material_params.base,
-    };
+        view,
+        material_params.base,
+        |normal_dot_view: f32, perceptual_roughness: glam_pbr::PerceptualRoughness| {
+            let uv = Vec2::new(normal_dot_view, perceptual_roughness.0);
+            let sample: Vec4 = ibl_lut.sample_by_lod(*sampler, uv, 0.0);
+            Vec2::new(sample.x, sample.y)
+        },
+    );
 
-    let result = glam_pbr::basic_brdf(brdf_params);
+    let diffuse_output = glam_pbr::ibl_irradiance_lambertian(
+        normal,
+        view,
+        material_params.base,
+        lut_values,
+        |normal| {
+            let sample: Vec4 = diffuse_ibl_cubemap.sample_by_lod(*sampler, normal, 0.0);
+            sample.truncate()
+        },
+    );
 
-    *output = (result.diffuse + result.specular + material_params.emission).extend(1.0);
+    let specular_output = glam_pbr::get_ibl_radiance_ggx(
+        normal,
+        view,
+        material_params.base,
+        lut_values,
+        9,
+        |ray, lod| {
+            let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, lod);
+            sample.truncate()
+        },
+    );
+
+    *output = (diffuse_output + specular_output + material_params.emission).extend(1.0);
 }
 
 #[spirv(fragment)]
