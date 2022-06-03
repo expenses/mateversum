@@ -15,6 +15,8 @@ impl<T> ResourceCache<T> {
         if let Some(resource) = self.inner.get(key) {
             resource
         } else {
+            log::info!("Generating {}", key);
+
             self.inner.insert(key, Box::new(func()))
         }
     }
