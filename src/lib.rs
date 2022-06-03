@@ -389,6 +389,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         performance_settings,
         thread_pool,
         request_client,
+        bc6h_supported: adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
     });
 
     let models = Rc::new(RefCell::new(slotmap::SlotMap::new()));
@@ -527,17 +530,17 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     .await
     .map_err(|err| err.to_string())?;
 
+    let diffuse_ibl_cubemap =
+        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.diffuse_ibl_cubemap.clone()))
+            .await
+            .map_err(|err| err.to_string())?;
+
     let specular_ibl_cubemap = assets::load_ktx2_cubemap(
         context.clone(),
         &Rc::new(world.specular_ibl_cubemap.clone()),
     )
     .await
     .map_err(|err| err.to_string())?;
-
-    let diffuse_ibl_cubemap =
-        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.diffuse_ibl_cubemap.clone()))
-            .await
-            .map_err(|err| err.to_string())?;
 
     let send_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())?.into();
@@ -833,8 +836,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 ),
             );
 
-            let right_view = views.get(1).unwrap_or(&views[0]);
-
             queue.write_buffer(
                 &skybox_uniform_buffer,
                 0,
@@ -845,9 +846,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         left_view_inverse: Instance::from_transform(views[0].transform(), 1.0)
                             .rotation
                             .into(),
-                        right_view_inverse: Instance::from_transform(right_view.transform(), 1.0)
-                            .rotation
-                            .into(),
+                        right_view_inverse: Instance::from_transform(
+                            views.get(1).unwrap_or(&views[0]).transform(),
+                            1.0,
+                        )
+                        .rotation
+                        .into(),
                     }
                     .as_std140(),
                 ),
@@ -2263,7 +2267,9 @@ impl Pipelines {
                 vertex: wgpu::VertexState {
                     module: shader_cache.get("vertex_skybox", || {
                         device.create_shader_module(&if multiview.is_none() {
-                            wgpu::include_spirv!("../compiled-shaders/single_view_vertex_skybox.spv")
+                            wgpu::include_spirv!(
+                                "../compiled-shaders/single_view_vertex_skybox.spv"
+                            )
                         } else {
                             wgpu::include_spirv!("../compiled-shaders/vertex_skybox.spv")
                         })
@@ -2297,7 +2303,9 @@ impl Pipelines {
                 vertex: wgpu::VertexState {
                     module: shader_cache.get("vertex_skybox_mirrored", || {
                         device.create_shader_module(&if multiview.is_none() {
-                            wgpu::include_spirv!("../compiled-shaders/single_view_vertex_skybox_mirrored.spv")
+                            wgpu::include_spirv!(
+                                "../compiled-shaders/single_view_vertex_skybox_mirrored.spv"
+                            )
                         } else {
                             wgpu::include_spirv!("../compiled-shaders/vertex_skybox_mirrored.spv")
                         })

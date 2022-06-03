@@ -175,7 +175,14 @@ pub fn vertex_skybox_mirrored(
     #[spirv(position)] builtin_pos: &mut Vec4,
     ray: &mut Vec3,
 ) {
-    super::vertex_skybox_mirrored(vertex_index, skybox_uniforms, mirror_uniforms, builtin_pos, 0, ray);
+    super::vertex_skybox_mirrored(
+        vertex_index,
+        skybox_uniforms,
+        mirror_uniforms,
+        builtin_pos,
+        0,
+        ray,
+    );
 }
 
 #[spirv(fragment)]

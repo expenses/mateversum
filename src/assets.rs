@@ -31,6 +31,7 @@ pub(crate) struct ModelLoadContext {
     pub(crate) performance_settings: PerformanceSettings,
     pub(crate) thread_pool: wasm_futures_executor::ThreadPool,
     pub(crate) request_client: RequestClient,
+    pub(crate) bc6h_supported: bool,
 }
 
 struct ModelBuffers {
@@ -1077,6 +1078,8 @@ pub(crate) async fn load_ktx2_cubemap(
     let base_width = header.pixel_width - (header.pixel_width % 4);
     let base_height = header.pixel_height - (header.pixel_height % 4);
 
+    let bc6h_supported = context.bc6h_supported;
+
     let texture_descriptor = move || wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
@@ -1087,7 +1090,11 @@ pub(crate) async fn load_ktx2_cubemap(
         mip_level_count: header.level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba16Float,
+        format: if bc6h_supported {
+            wgpu::TextureFormat::Bc6hRgbUfloat
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        },
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
     };
 
@@ -1103,77 +1110,76 @@ pub(crate) async fn load_ktx2_cubemap(
 
     let mut levels = level_indices.into_iter().enumerate().rev();
 
-    // Load all other mips in the background.
     wasm_bindgen_futures::spawn_local({
         let url = Rc::clone(url);
         let texture = Rc::clone(&texture);
 
         async move {
-            let decompression_pipeline = context.pipeline_cache.get("bc6 decompression", || {
-                let bind_group_layout =
-                    context
-                        .device
-                        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                            label: None,
-                            entries: &[wgpu::BindGroupLayoutEntry {
-                                binding: 0,
-                                visibility: wgpu::ShaderStages::FRAGMENT,
-                                ty: wgpu::BindingType::Texture {
-                                    sample_type: wgpu::TextureSampleType::Uint,
-                                    view_dimension: wgpu::TextureViewDimension::D2,
-                                    multisampled: false,
-                                },
-                                count: None,
-                            }],
-                        });
-
-                let pipeline_layout =
-                    context
-                        .device
-                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                            label: None,
-                            bind_group_layouts: &[&bind_group_layout],
-                            push_constant_ranges: &[],
-                        });
-
-                let pipeline =
-                    context
-                        .device
-                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                            label: None,
-                            layout: Some(&pipeline_layout),
-                            vertex: wgpu::VertexState {
-                                module: context.shader_cache.get("fullscreen_tri", || {
-                                    context.device.create_shader_module(&wgpu::include_spirv!(
-                                        "../compiled-shaders/fullscreen_tri.spv"
-                                    ))
-                                }),
-                                entry_point: "fullscreen_tri",
-                                buffers: &[],
+            let decompression_pipeline =
+                if bc6h_supported {
+                    None
+                } else {
+                    Some(context.pipeline_cache.get("bc6 decompression", || {
+                        let bind_group_layout = context.device.create_bind_group_layout(
+                            &wgpu::BindGroupLayoutDescriptor {
+                                label: None,
+                                entries: &[wgpu::BindGroupLayoutEntry {
+                                    binding: 0,
+                                    visibility: wgpu::ShaderStages::FRAGMENT,
+                                    ty: wgpu::BindingType::Texture {
+                                        sample_type: wgpu::TextureSampleType::Uint,
+                                        view_dimension: wgpu::TextureViewDimension::D2,
+                                        multisampled: false,
+                                    },
+                                    count: None,
+                                }],
                             },
-                            fragment: Some(wgpu::FragmentState {
-                                module: context.shader_cache.get("bc6", || {
-                                    context.device.create_shader_module(&wgpu::include_spirv!(
-                                        "../compiled-shaders/bc6.spv"
-                                    ))
+                        );
+
+                        let pipeline_layout = context.device.create_pipeline_layout(
+                            &wgpu::PipelineLayoutDescriptor {
+                                label: None,
+                                bind_group_layouts: &[&bind_group_layout],
+                                push_constant_ranges: &[],
+                            },
+                        );
+
+                        let pipeline = context.device.create_render_pipeline(
+                            &wgpu::RenderPipelineDescriptor {
+                                label: None,
+                                layout: Some(&pipeline_layout),
+                                vertex: wgpu::VertexState {
+                                    module: context.shader_cache.get("fullscreen_tri", || {
+                                        context.device.create_shader_module(&wgpu::include_spirv!(
+                                            "../compiled-shaders/fullscreen_tri.spv"
+                                        ))
+                                    }),
+                                    entry_point: "fullscreen_tri",
+                                    buffers: &[],
+                                },
+                                fragment: Some(wgpu::FragmentState {
+                                    module: context.shader_cache.get("bc6", || {
+                                        context.device.create_shader_module(&wgpu::include_spirv!(
+                                            "../compiled-shaders/bc6.spv"
+                                        ))
+                                    }),
+                                    entry_point: "main",
+                                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
                                 }),
-                                entry_point: "main",
-                                targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                            }),
-                            primitive: Default::default(),
-                            depth_stencil: None,
-                            multisample: Default::default(),
-                            multiview: Default::default(),
-                        });
+                                primitive: Default::default(),
+                                depth_stencil: None,
+                                multisample: Default::default(),
+                                multiview: Default::default(),
+                            },
+                        );
 
-                PipelineData {
-                    pipeline,
-                    bind_group_layout,
-                    pipeline_layout,
-                }
-            });
-
-            let mut command_encoder = context.device.create_command_encoder(&Default::default());
+                        PipelineData {
+                            pipeline,
+                            bind_group_layout,
+                            pipeline_layout,
+                        }
+                    }))
+                };
 
             for (i, level_index) in levels {
                 let bytes = context
@@ -1198,118 +1204,125 @@ pub(crate) async fn load_ktx2_cubemap(
                     None => bytes.to_vec(),
                 };
 
-                let stride = decompressed.len() / 6;
+                if let Some(decompression_pipeline) = decompression_pipeline.as_ref() {
+                    let mut command_encoder =
+                        context.device.create_command_encoder(&Default::default());
 
-                for face in 0..6 {
-                    let bytes = &decompressed[face * stride..(face + 1) * stride];
+                    let stride = decompressed.len() / 6;
 
-                    let input_texture = context.device.create_texture_with_data(
-                        &context.queue,
-                        &wgpu::TextureDescriptor {
-                            label: None,
-                            size: wgpu::Extent3d {
-                                width: base_width >> (i + 2),
-                                height: base_height >> (i + 2),
+                    for face in 0..6 {
+                        let bytes = &decompressed[face * stride..(face + 1) * stride];
+
+                        let input_texture = context.device.create_texture_with_data(
+                            &context.queue,
+                            &wgpu::TextureDescriptor {
+                                label: None,
+                                size: wgpu::Extent3d {
+                                    width: base_width >> (i + 2),
+                                    height: base_height >> (i + 2),
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba32Uint,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                            },
+                            bytes,
+                        );
+
+                        let output_texture =
+                            context.device.create_texture(&wgpu::TextureDescriptor {
+                                label: None,
+                                size: wgpu::Extent3d {
+                                    width: base_width >> i,
+                                    height: base_height >> i,
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba16Float,
+                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                    | wgpu::TextureUsages::COPY_SRC,
+                            });
+
+                        let bind_group =
+                            context
+                                .device
+                                .create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: None,
+                                    layout: &decompression_pipeline.bind_group_layout,
+                                    entries: &[wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(
+                                            &input_texture.create_view(&Default::default()),
+                                        ),
+                                    }],
+                                });
+
+                        let output_view = output_texture.create_view(&Default::default());
+
+                        let mut render_pass =
+                            command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: None,
+                                color_attachments: &[wgpu::RenderPassColorAttachment {
+                                    view: &output_view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: true,
+                                    },
+                                }],
+                                depth_stencil_attachment: None,
+                            });
+
+                        render_pass.set_pipeline(&decompression_pipeline.pipeline);
+
+                        render_pass.set_bind_group(0, &bind_group, &[]);
+
+                        render_pass.draw(0..3, 0..1);
+
+                        drop(render_pass);
+
+                        command_encoder.copy_texture_to_texture(
+                            wgpu::ImageCopyTexture {
+                                texture: &output_texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::ImageCopyTexture {
+                                texture: &texture.texture,
+                                mip_level: i as u32,
+                                origin: wgpu::Origin3d {
+                                    x: 0,
+                                    y: 0,
+                                    z: face as u32,
+                                },
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::Extent3d {
+                                width: base_width >> i,
+                                height: base_width >> i,
                                 depth_or_array_layers: 1,
                             },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba32Uint,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                        },
-                        bytes,
-                    );
+                        );
+                    }
 
-                    let output_texture = context.device.create_texture(&wgpu::TextureDescriptor {
-                        label: None,
-                        size: wgpu::Extent3d {
-                            width: base_width >> i,
-                            height: base_height >> i,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::COPY_SRC,
-                    });
-
-                    let bind_group = context
-                        .device
-                        .create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: None,
-                            layout: &decompression_pipeline.bind_group_layout,
-                            entries: &[wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(
-                                    &input_texture.create_view(&Default::default()),
-                                ),
-                            }],
-                        });
-
-                    let output_view = output_texture.create_view(&Default::default());
-
-                    let mut render_pass =
-                        command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: None,
-                            color_attachments: &[wgpu::RenderPassColorAttachment {
-                                view: &output_view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: true,
-                                },
-                            }],
-                            depth_stencil_attachment: None,
-                        });
-
-                    render_pass.set_pipeline(&decompression_pipeline.pipeline);
-
-                    render_pass.set_bind_group(0, &bind_group, &[]);
-
-                    render_pass.draw(0..3, 0..1);
-
-                    drop(render_pass);
-
-                    command_encoder.copy_texture_to_texture(
-                        wgpu::ImageCopyTexture {
-                            texture: &output_texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::ImageCopyTexture {
-                            texture: &texture.texture,
-                            mip_level: i as u32,
-                            origin: wgpu::Origin3d {
-                                x: 0,
-                                y: 0,
-                                z: face as u32,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: base_width >> i,
-                            height: base_width >> i,
-                            depth_or_array_layers: 1,
-                        },
+                    context
+                        .queue
+                        .submit(std::iter::once(command_encoder.finish()));
+                } else {
+                    write_bytes_to_texture(
+                        &context.queue,
+                        &texture.texture,
+                        i as u32,
+                        &decompressed,
+                        &texture_descriptor(),
                     );
                 }
-
-                //let output_texture = context.device.create_texture()
-
-                /*write_bytes_to_texture(
-                    &context.queue,
-                    &texture.texture,
-                    i as u32,
-                    &decompressed,
-                    &texture_descriptor(),
-                );*/
             }
-
-            context.queue.submit(std::iter::once(command_encoder.finish()));
         }
     });
 
