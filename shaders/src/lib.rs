@@ -18,7 +18,7 @@ mod single_view;
 
 pub use single_view::{
     fragment as _, fragment_alpha_clipped as _, line_vertex as _, tonemap as _, vertex as _,
-    vertex_mirrored as _,
+    vertex_mirrored as _, vertex_skybox as _, vertex_skybox_mirrored as _,
 };
 
 #[spirv(vertex)]

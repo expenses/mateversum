@@ -157,6 +157,27 @@ pub fn vertex_mirrored(
     )
 }
 
+#[spirv(vertex)]
+pub fn vertex_skybox(
+    #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    ray: &mut Vec3,
+) {
+    super::vertex_skybox(vertex_index, skybox_uniforms, builtin_pos, 0, ray);
+}
+
+#[spirv(vertex)]
+pub fn vertex_skybox_mirrored(
+    #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
+    #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    ray: &mut Vec3,
+) {
+    super::vertex_skybox_mirrored(vertex_index, skybox_uniforms, mirror_uniforms, builtin_pos, 0, ray);
+}
+
 #[spirv(fragment)]
 pub fn tonemap(
     uv: Vec2,
