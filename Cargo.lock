@@ -928,7 +928,7 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 [[package]]
 name = "naga"
 version = "0.8.0"
-source = "git+https://github.com/expenses/naga?branch=webxr#d17846dfcb4111874af5364fc09b846671b4abdb"
+source = "git+https://github.com/expenses/naga?branch=webxr#afeb3e26f875c6f932f5a3c7fe09f0abe7983b81"
 dependencies = [
  "bit-set",
  "bitflags",
@@ -1754,7 +1754,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#5048087576de5d240bc1e4b71ac31eb3dda4bb95"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#5048087576de5d240bc1e4b71ac31eb3dda4bb95"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
 dependencies = [
  "arrayvec",
  "bit-vec",
@@ -1797,7 +1797,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#5048087576de5d240bc1e4b71ac31eb3dda4bb95"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
 dependencies = [
  "arrayvec",
  "ash",
@@ -1834,7 +1834,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#5048087576de5d240bc1e4b71ac31eb3dda4bb95"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
 dependencies = [
  "bitflags",
 ]
