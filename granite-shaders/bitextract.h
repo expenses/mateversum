@@ -28,14 +28,15 @@ uint uint_bitfieldExtract(uint data, int offset, int bits) {
 	return (data >> offset) & mask;
 }
 
+// Taken from:
+// https://github.com/KhronosGroup/BC6H-Decoder-WASM/blob/322615ff672508d08f4781588fad6938062df2e7/assembly/decoder.ts#L1128-L1136
 int signExtend(uint width, int value) {
-	uint s = 32 - width;
-	return (value << s) >> s;
+	uint shift = 32 - width;
+	return (value << shift) >> shift;
 }
 
 int int_bitfieldExtract(int data, int offset, int bits) {
 	int mask = (1 << bits) - 1;
-
 	int masked = (data >> offset) & mask;
 
 	return signExtend(bits, masked);
@@ -65,8 +66,8 @@ ivec3 imix(ivec3 x, ivec3 y, bvec3 b) {
 	);
 }
 
-uint reverse(uint x)
-{
+// https://stackoverflow.com/a/9144870
+uint reverse(uint x) {
     x = ((x >> 1) & 0x55555555u) | ((x & 0x55555555u) << 1);
     x = ((x >> 2) & 0x33333333u) | ((x & 0x33333333u) << 2);
     x = ((x >> 4) & 0x0f0f0f0fu) | ((x & 0x0f0f0f0fu) << 4);
