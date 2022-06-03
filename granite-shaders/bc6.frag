@@ -104,14 +104,14 @@ ivec3 unquantize_endpoint(ivec3 ep, int bits)
     ivec3 unq;
     if (SIGNED)
     {
-        ep = bitfieldExtract(ep, 0, bits);
+        ep = ivec3_bitfieldExtract(ep, 0, bits);
         if (bits < 16)
         {
             ivec3 sgn = 1 - ((ep >> 30) & 2);
             ivec3 abs_ep = abs(ep);
             unq = ((abs_ep << 15) + 0x4000) >> (bits - 1);
-            unq = mix(unq, ivec3(0), equal(ep, ivec3(0)));
-            unq = mix(unq, ivec3(0x7fff), greaterThanEqual(abs_ep, ivec3((1 << (bits - 1)) - 1)));
+            unq = imix(unq, ivec3(0), equal(ep, ivec3(0)));
+            unq = imix(unq, ivec3(0x7fff), greaterThanEqual(abs_ep, ivec3((1 << (bits - 1)) - 1)));
             unq *= sgn;
         }
         else
@@ -119,12 +119,12 @@ ivec3 unquantize_endpoint(ivec3 ep, int bits)
     }
     else
     {
-        ep = ivec3(bitfieldExtract(uvec3(ep), 0, bits));
+        ep = ivec3(uvec3_bitfieldExtract(uvec3(ep), 0, bits));
         if (bits < 15)
         {
             unq = ((ep << 15) + 0x4000) >> (bits - 1);
-            unq = mix(unq, ivec3(0), equal(ep, ivec3(0)));
-            unq = mix(unq, ivec3(0xffff), equal(ep, ivec3((1 << bits) - 1)));
+            unq = imix(unq, ivec3(0), equal(ep, ivec3(0)));
+            unq = imix(unq, ivec3(0xffff), equal(ep, ivec3((1 << bits) - 1)));
         }
         else
             unq = ep;
