@@ -1093,7 +1093,7 @@ pub(crate) async fn load_ktx2_cubemap(
         format: if bc6h_supported {
             wgpu::TextureFormat::Bc6hRgbUfloat
         } else {
-            wgpu::TextureFormat::Rgba16Float
+            wgpu::TextureFormat::Rg11b10Float
         },
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
     };
@@ -1164,7 +1164,7 @@ pub(crate) async fn load_ktx2_cubemap(
                                         ))
                                     }),
                                     entry_point: "main",
-                                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+                                    targets: &[wgpu::TextureFormat::Rg11b10Float.into()],
                                 }),
                                 primitive: Default::default(),
                                 depth_stencil: None,
@@ -1242,7 +1242,7 @@ pub(crate) async fn load_ktx2_cubemap(
                                 mip_level_count: 1,
                                 sample_count: 1,
                                 dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::Rgba16Float,
+                                format: wgpu::TextureFormat::Rg11b10Float,
                                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                                     | wgpu::TextureUsages::COPY_SRC,
                             });
