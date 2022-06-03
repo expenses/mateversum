@@ -34,7 +34,10 @@ pub fn fragment(
     normal: Vec3,
     uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
-    #[spirv(descriptor_set = 0, binding = 1)] _sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 2)] ibl_lut: &SampledImage,
+    #[spirv(descriptor_set = 0, binding = 3)] diffuse_ibl_cubemap: &Image!(cube, type=f32, sampled),
+    #[spirv(descriptor_set = 0, binding = 4)] specular_ibl_cubemap: &Image!(cube, type=f32, sampled),
     #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
@@ -51,7 +54,10 @@ pub fn fragment(
         normal,
         uv,
         uniforms,
-        _sampler,
+        sampler,
+        ibl_lut,
+        diffuse_ibl_cubemap,
+        specular_ibl_cubemap,
         albedo_texture,
         normal_texture,
         metallic_roughness_texture,
@@ -72,7 +78,10 @@ pub fn fragment_alpha_clipped(
     normal: Vec3,
     uv: Vec2,
     #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
-    #[spirv(descriptor_set = 0, binding = 1)] _sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+    #[spirv(descriptor_set = 0, binding = 2)] ibl_lut: &SampledImage,
+    #[spirv(descriptor_set = 0, binding = 3)] diffuse_ibl_cubemap: &Image!(cube, type=f32, sampled),
+    #[spirv(descriptor_set = 0, binding = 4)] specular_ibl_cubemap: &Image!(cube, type=f32, sampled),
     #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 1)] normal_texture: &SampledImage,
     #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
@@ -89,7 +98,10 @@ pub fn fragment_alpha_clipped(
         normal,
         uv,
         uniforms,
-        _sampler,
+        sampler,
+        ibl_lut,
+        diffuse_ibl_cubemap,
+        specular_ibl_cubemap,
         albedo_texture,
         normal_texture,
         metallic_roughness_texture,
@@ -145,6 +157,34 @@ pub fn vertex_mirrored(
     )
 }
 
+#[spirv(vertex)]
+pub fn vertex_skybox(
+    #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    ray: &mut Vec3,
+) {
+    super::vertex_skybox(vertex_index, skybox_uniforms, builtin_pos, 0, ray);
+}
+
+#[spirv(vertex)]
+pub fn vertex_skybox_mirrored(
+    #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
+    #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
+    #[spirv(position)] builtin_pos: &mut Vec4,
+    ray: &mut Vec3,
+) {
+    super::vertex_skybox_mirrored(
+        vertex_index,
+        skybox_uniforms,
+        mirror_uniforms,
+        builtin_pos,
+        0,
+        ray,
+    );
+}
+
 #[spirv(fragment)]
 pub fn tonemap(
     uv: Vec2,
@@ -156,5 +196,5 @@ pub fn tonemap(
 
     let linear = aces_filmic(sample.truncate());
 
-    *output = linear_to_srgb(linear).extend(1.0)
+    *output = linear_to_srgb_approx(linear).extend(1.0)
 }

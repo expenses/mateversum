@@ -1,3 +1,5 @@
+rm compiled-shaders/*
+
 cd rust-gpu-cli-builder
 cargo run --release -- ../shaders --multimodule --output ../compiled-shaders --capabilities MultiView --extensions SPV_KHR_multiview
 cd ..
@@ -8,3 +10,6 @@ for file in compiled-shaders/*.spv; do
     cd ../../vr/webxr-pbr
     spirv-val $file || echo $file;
 done;
+
+glslc granite-shaders/bc6.frag -o compiled-shaders/bc6.spv
+spirv-opt compiled-shaders/bc6.spv -O -o compiled-shaders/bc6.spv

@@ -31,6 +31,33 @@ impl Uniforms {
     }
 }
 
+#[cfg_attr(not(target_arch = "spirv"), derive(crevice::std140::AsStd140))]
+#[repr(C)]
+pub struct SkyboxUniforms {
+    pub left_projection_inverse: FlatMat4,
+    pub right_projection_inverse: FlatMat4,
+    pub left_view_inverse: Vec4,
+    pub right_view_inverse: Vec4,
+}
+
+impl SkyboxUniforms {
+    pub fn projection_inverse(&self, view_index: i32) -> Mat4 {
+        Mat4::from(if view_index != 0 {
+            self.right_projection_inverse
+        } else {
+            self.left_projection_inverse
+        })
+    }
+
+    pub fn view_inverse(&self, view_index: i32) -> Vec4 {
+        if view_index != 0 {
+            self.right_view_inverse
+        } else {
+            self.left_view_inverse
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(not(target_arch = "spirv"), derive(AsStd140))]
 pub struct FlatMat4 {

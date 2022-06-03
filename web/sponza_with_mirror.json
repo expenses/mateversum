@@ -34,5 +34,8 @@
         45.0,
         0.0
     ]
-  }
+  },
+  "ibl_lut": "environment_maps/lut_ggx.ktx2",
+  "specular_ibl_cubemap": "environment_maps/helipad/specular_compressed.ktx2",
+  "diffuse_ibl_cubemap": "environment_maps/helipad/diffuse_compressed.ktx2"
 }

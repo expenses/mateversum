@@ -266,6 +266,17 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         },
     };
 
+    let cubemap_entry = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        count: None,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::Cube,
+            multisampled: false,
+        },
+    };
+
     let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -278,6 +289,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         entries: &[
             uniform_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
             sampler_entry(1),
+            texture_entry(2),
+            cubemap_entry(3),
+            cubemap_entry(4),
         ],
     });
 
@@ -320,6 +334,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         entries: &[texture_entry(0)],
     });
 
+    let skybox_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("skybox bind group layout"),
+        entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+    });
+
     let shader_cache = Rc::new(ResourceCache::default());
 
     let pipelines = Pipelines::new(
@@ -330,6 +349,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &mirror_uniform_bgl,
         &tonemap_bgl,
         &ui_texture_bgl,
+        &skybox_bgl,
         multiview,
     );
 
@@ -369,6 +389,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         performance_settings,
         thread_pool,
         request_client,
+        bc6h_supported: adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
     });
 
     let models = Rc::new(RefCell::new(slotmap::SlotMap::new()));
@@ -406,11 +429,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .borrow_mut()
             .insert(model_url.as_str().to_string(), slot);
 
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Err(error) = load_model(model_url, slot, context, &models).await {
-                    log::error!("Failed to load model: {}", error);
-                }
-            });
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = load_model(model_url, slot, context, &models).await {
+                log::error!("Failed to load model: {}", error);
+            }
+        });
     }
 
     let hand_model = {
@@ -498,6 +521,27 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }
     };
 
+    let ibl_lut = assets::load_ktx2_async(
+        context.clone(),
+        false,
+        &Rc::new(world.ibl_lut.clone()),
+        |_| {},
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+
+    let diffuse_ibl_cubemap =
+        assets::load_ktx2_cubemap(context.clone(), &Rc::new(world.diffuse_ibl_cubemap.clone()))
+            .await
+            .map_err(|err| err.to_string())?;
+
+    let specular_ibl_cubemap = assets::load_ktx2_cubemap(
+        context.clone(),
+        &Rc::new(world.specular_ibl_cubemap.clone()),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+
     let send_fn: js_sys::Function =
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"send_xr_data".into())?.into();
 
@@ -531,6 +575,13 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         mapped_at_creation: false,
     });
 
+    let skybox_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("skybox uniform buffer"),
+        size: std::mem::size_of::<shared_structs::SkyboxUniforms>() as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        mapped_at_creation: false,
+    });
+
     let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("uniform bind group"),
         layout: &uniform_bgl,
@@ -543,7 +594,28 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&linear_sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&ibl_lut.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&diffuse_ibl_cubemap.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&specular_ibl_cubemap.view),
+            },
         ],
+    });
+
+    let skybox_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("skybox uniform bind group"),
+        layout: &skybox_bgl,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: skybox_uniform_buffer.as_entire_binding(),
+        }],
     });
 
     let mut line_verts = [
@@ -737,18 +809,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
             };
 
-            let (right_projection_view, right_eye_position) = if let Some(right_view) = views.get(1)
-            {
-                let right_inv = parse_matrix(right_view.transform().inverse().matrix());
-                let right_proj = parse_matrix(right_view.projection_matrix());
+            let (right_projection_view, right_proj, right_eye_position) =
+                if let Some(right_view) = views.get(1) {
+                    let right_inv = parse_matrix(right_view.transform().inverse().matrix());
+                    let right_proj = parse_matrix(right_view.projection_matrix());
 
-                ((right_proj * right_inv).into(), {
-                    let p = right_view.transform().position();
-                    glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                })
-            } else {
-                Default::default()
-            };
+                    ((right_proj * right_inv).into(), right_proj, {
+                        let p = right_view.transform().position();
+                        glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
+                    })
+                } else {
+                    Default::default()
+                };
 
             queue.write_buffer(
                 &uniform_buffer,
@@ -759,6 +831,27 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         right_projection_view,
                         left_eye_position,
                         right_eye_position,
+                    }
+                    .as_std140(),
+                ),
+            );
+
+            queue.write_buffer(
+                &skybox_uniform_buffer,
+                0,
+                bytemuck::bytes_of(
+                    &shared_structs::SkyboxUniforms {
+                        left_projection_inverse: left_proj.inverse().into(),
+                        right_projection_inverse: right_proj.inverse().into(),
+                        left_view_inverse: Instance::from_transform(views[0].transform(), 1.0)
+                            .rotation
+                            .into(),
+                        right_view_inverse: Instance::from_transform(
+                            views.get(1).unwrap_or(&views[0]).transform(),
+                            1.0,
+                        )
+                        .rotation
+                        .into(),
                     }
                     .as_std140(),
                 ),
@@ -999,12 +1092,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 view: hdr_framebuffer,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1 / 5.0,
-                        g: 0.2 / 5.0,
-                        b: 0.3 / 5.0,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Load,
                     store: true,
                 },
             }],
@@ -1102,6 +1190,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             }
 
             {
+                render_pass.set_pipeline(&pipelines.skybox_mirrored);
+                render_pass.set_bind_group(1, &skybox_uniform_bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
+
+            {
                 render_pass.set_pipeline(&pipelines.set_depth);
 
                 bind_model_buffers(&mut render_pass, &mirror_model.model);
@@ -1157,6 +1251,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }
 
         {
+            render_pass.set_pipeline(&pipelines.line);
+            render_pass.set_vertex_buffer(0, line_buffer.slice(..));
+            render_pass.draw(0..4, 0..1);
+        }
+
+        {
+            render_pass.set_pipeline(&pipelines.skybox);
+            render_pass.set_bind_group(1, &skybox_uniform_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        {
             render_pass.set_pipeline(&pipelines.ui);
 
             bind_model_buffers(&mut render_pass, &ui_plane_model.model);
@@ -1165,12 +1271,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
 
             render_pass.draw_indexed(0..ui_plane_model.model.num_indices, 0, 0..1);
-        }
-
-        {
-            render_pass.set_pipeline(&pipelines.line);
-            render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-            render_pass.draw(0..4, 0..1);
         }
 
         drop(render_pass);
@@ -1253,71 +1353,79 @@ fn setup_callbacks(
         js_sys::Reflect::get(&web_sys::window().unwrap(), &"set_handle_spawn".into())?.into();
 
     let handle_spawn = wasm_bindgen::closure::Closure::wrap(Box::new({
-        let handle_spawn_fallible = move |url: String, position: js_sys::Array| -> anyhow::Result<()> {
-            let position = glam::DVec3::new(
-                position.get(0).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
-                position.get(1).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
-                position.get(2).as_f64().ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
-            )
-            .as_vec3();
+        let handle_spawn_fallible =
+            move |url: String, position: js_sys::Array| -> anyhow::Result<()> {
+                let position = glam::DVec3::new(
+                    position
+                        .get(0)
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                    position
+                        .get(1)
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                    position
+                        .get(2)
+                        .as_f64()
+                        .ok_or_else(|| anyhow::anyhow!("Failed to parse position"))?,
+                )
+                .as_vec3();
 
-            let instance = Instance::new(position, 1.0, Default::default());
+                let instance = Instance::new(position, 1.0, Default::default());
 
-            let (slot, new_model) = match urls_to_model_slots.borrow().get(&url) {
-                Some(slot) => (*slot, false),
-                None => {
-                    let instances = vec![instance];
+                let (slot, new_model) = match urls_to_model_slots.borrow().get(&url) {
+                    Some(slot) => (*slot, false),
+                    None => {
+                        let instances = vec![instance];
 
-                    let slot = models.borrow_mut().insert(InstancedModel {
-                        model: None,
-                        instance_buffer: ResizingBuffer::new(
-                            &device,
-                            bytemuck::cast_slice(&instances),
-                            wgpu::BufferUsages::VERTEX,
-                        ),
-                        instances,
-                    });
+                        let slot = models.borrow_mut().insert(InstancedModel {
+                            model: None,
+                            instance_buffer: ResizingBuffer::new(
+                                &device,
+                                bytemuck::cast_slice(&instances),
+                                wgpu::BufferUsages::VERTEX,
+                            ),
+                            instances,
+                        });
 
-                    (slot, true)
-                }
-            };
-
-            if !new_model {
-                if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
-                    instanced_model.instances.push(instance);
-                    instanced_model.instance_buffer.write(
-                        &device,
-                        &queue,
-                        bytemuck::cast_slice(&instanced_model.instances),
-                    );
-                } else {
-                    log::warn!(
-                        "Spawn failed: no model found for slot {:?}, url '{}'",
-                        slot,
-                        url
-                    );
-                }
-            } else {
-                let model_url = url::Url::options()
-                    .base_url(Some(&href))
-                    .parse(&url)?;
-
-                urls_to_model_slots
-                    .borrow_mut()
-                    .insert(model_url.as_str().to_string(), slot);
-
-                let context = context.clone();
-                let models = models.clone();
-
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Err(error) = load_model(model_url, slot, context, &models).await {
-                        log::error!("Failed to load model: {}", error);
+                        (slot, true)
                     }
-                });
-            }
+                };
 
-            Ok(())
-        };
+                if !new_model {
+                    if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
+                        instanced_model.instances.push(instance);
+                        instanced_model.instance_buffer.write(
+                            &device,
+                            &queue,
+                            bytemuck::cast_slice(&instanced_model.instances),
+                        );
+                    } else {
+                        log::warn!(
+                            "Spawn failed: no model found for slot {:?}, url '{}'",
+                            slot,
+                            url
+                        );
+                    }
+                } else {
+                    let model_url = url::Url::options().base_url(Some(&href)).parse(&url)?;
+
+                    urls_to_model_slots
+                        .borrow_mut()
+                        .insert(model_url.as_str().to_string(), slot);
+
+                    let context = context.clone();
+                    let models = models.clone();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Err(error) = load_model(model_url, slot, context, &models).await {
+                            log::error!("Failed to load model: {}", error);
+                        }
+                    });
+                }
+
+                Ok(())
+            };
 
         move |url: String, position: js_sys::Array| {
             if let Err(error) = handle_spawn_fallible(url, position) {
@@ -1612,6 +1720,12 @@ struct InstancedModel {
 struct World {
     models: Vec<ModelReference>,
     mirror: Option<ModelReference>,
+    #[serde(deserialize_with = "deserialize_relative_url")]
+    ibl_lut: url::Url,
+    #[serde(deserialize_with = "deserialize_relative_url")]
+    diffuse_ibl_cubemap: url::Url,
+    #[serde(deserialize_with = "deserialize_relative_url")]
+    specular_ibl_cubemap: url::Url,
 }
 
 #[derive(serde::Deserialize)]
@@ -1726,7 +1840,7 @@ impl PipelineSet {
 
         Self {
             opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("opaque pipeline"),
                 layout: Some(pipeline_layout),
                 vertex: normal_vertex.clone(),
                 fragment: Some(opaque_fragment.clone()),
@@ -1736,7 +1850,7 @@ impl PipelineSet {
                 multiview,
             }),
             alpha_clipped: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("alpha clipped pipeline"),
                 layout: Some(pipeline_layout),
                 vertex: normal_vertex.clone(),
                 fragment: Some(alpha_clipped_fragment.clone()),
@@ -1746,7 +1860,7 @@ impl PipelineSet {
                 multiview,
             }),
             opaque_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("opaque mirrored pipeline"),
                 layout: Some(mirrored_pipeline_layout),
                 vertex: mirrored_vertex.clone(),
                 fragment: Some(opaque_fragment.clone()),
@@ -1757,7 +1871,7 @@ impl PipelineSet {
             }),
             alpha_clipped_mirrored: device.create_render_pipeline(
                 &wgpu::RenderPipelineDescriptor {
-                    label: None,
+                    label: Some("alpha clipped pipeline"),
                     layout: Some(mirrored_pipeline_layout),
                     vertex: mirrored_vertex,
                     fragment: Some(alpha_clipped_fragment),
@@ -1779,6 +1893,8 @@ struct Pipelines {
     set_depth: wgpu::RenderPipeline,
     tonemap: wgpu::RenderPipeline,
     ui: wgpu::RenderPipeline,
+    skybox: wgpu::RenderPipeline,
+    skybox_mirrored: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -1790,6 +1906,7 @@ impl Pipelines {
         mirror_uniform_bgl: &wgpu::BindGroupLayout,
         tonemap_bgl: &wgpu::BindGroupLayout,
         ui_texture_bgl: &wgpu::BindGroupLayout,
+        skybox_bgl: &wgpu::BindGroupLayout,
         multiview: Option<std::num::NonZeroU32>,
     ) -> Self {
         let uniform_only_pipeline_layout =
@@ -2045,6 +2162,20 @@ impl Pipelines {
             push_constant_ranges: &[],
         });
 
+        let skybox_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("skybox pipeline layout"),
+                bind_group_layouts: &[uniform_bgl, skybox_bgl],
+                push_constant_ranges: &[],
+            });
+
+        let skybox_mirrored_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("skybox mirrored pipeline layout"),
+                bind_group_layouts: &[uniform_bgl, skybox_bgl, mirror_uniform_bgl],
+                push_constant_ranges: &[],
+            });
+
         Self {
             pbr: PipelineSet::new(
                 device,
@@ -2109,7 +2240,7 @@ impl Pipelines {
                 multiview,
             ),
             ui: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("ui pipeline"),
                 layout: Some(&ui_pipeline_layout),
                 vertex: vertex_state.clone(),
                 fragment: Some(wgpu::FragmentState {
@@ -2126,7 +2257,79 @@ impl Pipelines {
                     }],
                 }),
                 primitive: normal_primitive_state,
-                depth_stencil: Some(normal_depth_state),
+                depth_stencil: Some(normal_depth_state.clone()),
+                multisample: Default::default(),
+                multiview,
+            }),
+            skybox: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("skybox pipeline"),
+                layout: Some(&skybox_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader_cache.get("vertex_skybox", || {
+                        device.create_shader_module(&if multiview.is_none() {
+                            wgpu::include_spirv!(
+                                "../compiled-shaders/single_view_vertex_skybox.spv"
+                            )
+                        } else {
+                            wgpu::include_spirv!("../compiled-shaders/vertex_skybox.spv")
+                        })
+                    }),
+                    entry_point: &format!("{}vertex_skybox", prefix),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader_cache.get("fragment_skybox", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_skybox.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_skybox",
+                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+                }),
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth24PlusStencil8,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    bias: wgpu::DepthBiasState::default(),
+                    stencil: wgpu::StencilState::default(),
+                }),
+                multisample: Default::default(),
+                multiview,
+            }),
+            skybox_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("skybox mirrored pipeline"),
+                layout: Some(&skybox_mirrored_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader_cache.get("vertex_skybox_mirrored", || {
+                        device.create_shader_module(&if multiview.is_none() {
+                            wgpu::include_spirv!(
+                                "../compiled-shaders/single_view_vertex_skybox_mirrored.spv"
+                            )
+                        } else {
+                            wgpu::include_spirv!("../compiled-shaders/vertex_skybox_mirrored.spv")
+                        })
+                    }),
+                    entry_point: &format!("{}vertex_skybox_mirrored", prefix),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader_cache.get("fragment_skybox", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../compiled-shaders/fragment_skybox.spv"
+                        ))
+                    }),
+                    entry_point: "fragment_skybox",
+                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+                }),
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth24PlusStencil8,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    bias: wgpu::DepthBiasState::default(),
+                    stencil: wgpu::StencilState::default(),
+                }),
                 multisample: Default::default(),
                 multiview,
             }),
@@ -2155,13 +2358,14 @@ pub fn append_break() {
 
 type Models = Rc<RefCell<slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>>>;
 
-async fn load_model(url: url::Url, slot: slotmap::DefaultKey, context: Rc<ModelLoadContext>, models: &Models) -> anyhow::Result<()> {
-    let bytes = context
-        .request_client
-        .fetch_bytes(&url, None)
-        .await?;
-    let model = load_gltf_from_bytes(&bytes, Some(url), &context)
-        .await?;
+async fn load_model(
+    url: url::Url,
+    slot: slotmap::DefaultKey,
+    context: Rc<ModelLoadContext>,
+    models: &Models,
+) -> anyhow::Result<()> {
+    let bytes = context.request_client.fetch_bytes(&url, None).await?;
+    let model = load_gltf_from_bytes(&bytes, Some(url), &context).await?;
 
     if let Some(instanced_model) = models.borrow_mut().get_mut(slot) {
         instanced_model.model = Some(model);

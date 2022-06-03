@@ -556,7 +556,7 @@ dependencies = [
 [[package]]
 name = "glam-pbr"
 version = "0.1.0"
-source = "git+https://github.com/expenses/glam-pbr#7220833ecc98f1db4cb1cf0b4742e341a9b1a747"
+source = "git+https://github.com/expenses/glam-pbr#30db24ab8f21a7f725734ae9cb5797fcaeece86f"
 dependencies = [
  "glam",
  "num-traits",
@@ -928,7 +928,7 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 [[package]]
 name = "naga"
 version = "0.8.0"
-source = "git+https://github.com/expenses/naga?branch=webxr#0c66837dde64464503a335b2e234a8f556313efb"
+source = "git+https://github.com/expenses/naga?branch=webxr#d17846dfcb4111874af5364fc09b846671b4abdb"
 dependencies = [
  "bit-set",
  "bitflags",
@@ -1754,7 +1754,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions-cherry-pick#c3664a7c9e96297f1834ab9933d361f3312b0c4d"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions-cherry-pick#c3664a7c9e96297f1834ab9933d361f3312b0c4d"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -1796,7 +1796,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions-cherry-pick#c3664a7c9e96297f1834ab9933d361f3312b0c4d"
 dependencies = [
  "arrayvec",
  "ash",
@@ -1833,7 +1833,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7da24f3782a606cb708d68bbe236773a3dbab8d3"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions-cherry-pick#c3664a7c9e96297f1834ab9933d361f3312b0c4d"
 dependencies = [
  "bitflags",
 ]
