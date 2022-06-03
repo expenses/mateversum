@@ -78,7 +78,7 @@ impl ExtendedMaterialParams {
         emissive_texture: &TextureSampler,
         material_settings: &MaterialSettings,
     ) -> Self {
-        let diffuse = albedo_texture.sample() * material_settings.base_color_factor;
+        let albedo = albedo_texture.sample() * material_settings.base_color_factor;
         let emission = emissive_texture.sample().truncate() * material_settings.emissive_factor;
 
         let metallic_roughness = metallic_roughness_texture.sample();
@@ -87,14 +87,14 @@ impl ExtendedMaterialParams {
 
         Self {
             base: glam_pbr::MaterialParams {
-                albedo_colour: diffuse.truncate(),
+                albedo_colour: albedo.truncate(),
                 metallic,
                 perceptual_roughness: glam_pbr::PerceptualRoughness(roughness),
                 index_of_refraction: glam_pbr::IndexOfRefraction::default(),
                 specular_colour: Vec3::ONE,
                 specular_factor: 1.0,
             },
-            alpha: diffuse.w,
+            alpha: albedo.w,
             emission,
         }
     }
@@ -511,6 +511,7 @@ pub fn vertex_skybox(
     #[spirv(vertex_index)] vertex_index: i32,
     #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
+    #[spirv(view_index)] view_index: i32,
     ray: &mut Vec3,
 ) {
     // https://github.com/gfx-rs/wgpu/blob/9114283707a8b472412cf4fe685d364327d3a5b4/wgpu/examples/skybox/shader.wgsl#L21
@@ -521,9 +522,9 @@ pub fn vertex_skybox(
         1.0,
     );
 
-    let unprojected: Vec4 = glam::Mat4::from(skybox_uniforms.left_projection_inverse) * pos;
+    let unprojected: Vec4 = skybox_uniforms.projection_inverse(view_index) * pos;
 
-    *ray = glam::Quat::from_vec4(skybox_uniforms.left_view_inverse) * unprojected.truncate();
+    *ray = glam::Quat::from_vec4(skybox_uniforms.view_inverse(view_index)) * unprojected.truncate();
 
     *builtin_pos = pos;
 }
@@ -534,6 +535,7 @@ pub fn vertex_skybox_mirrored(
     #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
     #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
+    #[spirv(view_index)] view_index: i32,
     ray: &mut Vec3,
 ) {
     // https://github.com/gfx-rs/wgpu/blob/9114283707a8b472412cf4fe685d364327d3a5b4/wgpu/examples/skybox/shader.wgsl#L21
@@ -544,10 +546,10 @@ pub fn vertex_skybox_mirrored(
         1.0,
     );
 
-    let unprojected: Vec4 = glam::Mat4::from(skybox_uniforms.left_projection_inverse) * pos;
+    let unprojected: Vec4 = skybox_uniforms.projection_inverse(view_index) * pos;
 
     *ray = shared_structs::reflect(
-        glam::Quat::from_vec4(skybox_uniforms.left_view_inverse) * unprojected.truncate(),
+        glam::Quat::from_vec4(skybox_uniforms.view_inverse(view_index)) * unprojected.truncate(),
         mirror_uniforms.normal,
     );
 

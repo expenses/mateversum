@@ -1834,7 +1834,7 @@ impl PipelineSet {
 
         Self {
             opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("opaque pipeline"),
                 layout: Some(pipeline_layout),
                 vertex: normal_vertex.clone(),
                 fragment: Some(opaque_fragment.clone()),
@@ -1844,7 +1844,7 @@ impl PipelineSet {
                 multiview,
             }),
             alpha_clipped: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("alpha clipped pipeline"),
                 layout: Some(pipeline_layout),
                 vertex: normal_vertex.clone(),
                 fragment: Some(alpha_clipped_fragment.clone()),
@@ -1854,7 +1854,7 @@ impl PipelineSet {
                 multiview,
             }),
             opaque_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("opaque mirrored pipeline"),
                 layout: Some(mirrored_pipeline_layout),
                 vertex: mirrored_vertex.clone(),
                 fragment: Some(opaque_fragment.clone()),
@@ -1865,7 +1865,7 @@ impl PipelineSet {
             }),
             alpha_clipped_mirrored: device.create_render_pipeline(
                 &wgpu::RenderPipelineDescriptor {
-                    label: None,
+                    label: Some("alpha clipped pipeline"),
                     layout: Some(mirrored_pipeline_layout),
                     vertex: mirrored_vertex,
                     fragment: Some(alpha_clipped_fragment),
@@ -2234,7 +2234,7 @@ impl Pipelines {
                 multiview,
             ),
             ui: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("ui pipeline"),
                 layout: Some(&ui_pipeline_layout),
                 vertex: vertex_state.clone(),
                 fragment: Some(wgpu::FragmentState {
@@ -2256,7 +2256,7 @@ impl Pipelines {
                 multiview,
             }),
             skybox: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("skybox pipeline"),
                 layout: Some(&skybox_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: shader_cache.get("vertex_skybox", || {
@@ -2288,7 +2288,7 @@ impl Pipelines {
                 multiview,
             }),
             skybox_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some("skybox mirrored pipeline"),
                 layout: Some(&skybox_mirrored_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: shader_cache.get("vertex_skybox_mirrored", || {

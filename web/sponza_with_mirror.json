@@ -36,6 +36,6 @@
     ]
   },
   "ibl_lut": "environment_maps/lut_ggx.ktx2",
-  "specular_ibl_cubemap": "environment_maps/helipad/specular_compressed.ktx2",
-  "diffuse_ibl_cubemap": "environment_maps/helipad/diffuse_compressed.ktx2"
+  "specular_ibl_cubemap": "environment_maps/nebula/ggx_c.ktx2",
+  "diffuse_ibl_cubemap": "environment_maps/nebula/lamb_c.ktx2"
 }

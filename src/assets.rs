@@ -1037,6 +1037,76 @@ pub(crate) async fn load_ktx2_cubemap(
         ));
     }
 
+    {
+        let pipeline = context.pipeline_cache.get(
+            "bc6 decompression",
+            || {
+                let bind_group_layout =
+                    context
+                        .device
+                        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                            label: None,
+                            entries: &[
+                                wgpu::BindGroupLayoutEntry {
+                                    binding: 0,
+                                    visibility: wgpu::ShaderStages::FRAGMENT,
+                                    ty: wgpu::BindingType::Texture {
+                                        sample_type: wgpu::TextureSampleType::Uint,
+                                        view_dimension: wgpu::TextureViewDimension::D2,
+                                        multisampled: false,
+                                    },
+                                    count: None,
+                                },
+                            ],
+                        });
+    
+                let pipeline_layout =
+                    context
+                        .device
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: None,
+                            bind_group_layouts: &[&bind_group_layout],
+                            push_constant_ranges: &[],
+                        });
+    
+                let pipeline = context
+                    .device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: None,
+                        layout: Some(&pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: context.shader_cache.get("fullscreen_tri", || {
+                                context.device.create_shader_module(&wgpu::include_spirv!(
+                                    "../compiled-shaders/fullscreen_tri.spv"
+                                ))
+                            }),
+                            entry_point: "fullscreen_tri",
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: context.shader_cache.get("bc6", || {
+                                context.device.create_shader_module(&wgpu::include_spirv!(
+                                    "../compiled-shaders/bc6.spv"
+                                ))
+                            }),
+                            entry_point: "main",
+                            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+                        }),
+                        primitive: Default::default(),
+                        depth_stencil: None,
+                        multisample: Default::default(),
+                        multiview: Default::default(),
+                    });
+    
+                PipelineData {
+                    pipeline,
+                    bind_group_layout,
+                    pipeline_layout,
+                }
+            },
+        );
+    }
+
     if header.supercompression_scheme != Some(ktx2::SupercompressionScheme::Zstandard) {
         return Err(anyhow::anyhow!(
             "Got an unsupported supercompression scheme: {:?}",
