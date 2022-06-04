@@ -1108,8 +1108,6 @@ pub(crate) async fn load_ktx2_cubemap(
         texture,
     });
 
-    let mut levels = level_indices.into_iter().enumerate().rev();
-
     wasm_bindgen_futures::spawn_local({
         let url = Rc::clone(url);
         let texture = Rc::clone(&texture);
@@ -1181,7 +1179,7 @@ pub(crate) async fn load_ktx2_cubemap(
                     }))
                 };
 
-            for (i, level_index) in levels {
+            for (i, level_index) in level_indices.into_iter().enumerate().rev() {
                 let bytes = context
                     .request_client
                     .fetch_bytes(

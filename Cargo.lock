@@ -1754,7 +1754,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#c6d9f2ea07173cde2e03677eae9ec2b19f759bde"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#c6d9f2ea07173cde2e03677eae9ec2b19f759bde"
 dependencies = [
  "arrayvec",
  "bit-vec",
@@ -1797,7 +1797,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#c6d9f2ea07173cde2e03677eae9ec2b19f759bde"
 dependencies = [
  "arrayvec",
  "ash",
@@ -1834,7 +1834,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#7ab98d46661957d89a9e4f9d6362959b41fca9eb"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#c6d9f2ea07173cde2e03677eae9ec2b19f759bde"
 dependencies = [
  "bitflags",
 ]
