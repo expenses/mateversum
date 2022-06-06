@@ -1,4 +1,4 @@
-use crate::PerformanceSettings;
+use crate::{IndexBuffer, PerformanceSettings};
 use crevice::std140::AsStd140;
 use glam::{Vec2, Vec3};
 use std::borrow::Cow;
@@ -32,6 +32,7 @@ pub(crate) struct ModelLoadContext {
     pub(crate) thread_pool: wasm_futures_executor::ThreadPool,
     pub(crate) request_client: RequestClient,
     pub(crate) bc6h_supported: bool,
+    pub(crate) index_buffer: Rc<RefCell<IndexBuffer>>,
 }
 
 struct ModelBuffers {
@@ -334,9 +335,8 @@ pub(crate) struct Model {
     pub(crate) positions: wgpu::Buffer,
     pub(crate) normals: wgpu::Buffer,
     pub(crate) uvs: wgpu::Buffer,
-    pub(crate) indices: wgpu::Buffer,
+    pub(crate) index_range: Range<u32>,
     // todo: use indices ranges for opaque and alpha clipped models.
-    pub(crate) num_indices: u32,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -498,14 +498,30 @@ pub(crate) async fn load_gltf_from_bytes(
                 primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
             })
             .collect(),
-        num_indices: staging_buffers.indices.len() as u32,
-        indices: context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("indices"),
-                contents: bytemuck::cast_slice(&staging_buffers.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+        index_range: {
+            let mut command_encoder = context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+            let range = context
+                .index_buffer
+                .borrow_mut()
+                .insert(
+                    &staging_buffers.indices,
+                    &context.device,
+                    &context.queue,
+                    &mut command_encoder,
+                )
+                .await;
+
+            context
+                .queue
+                .submit(std::iter::once(command_encoder.finish()));
+
+            log::warn!("{:?}", range);
+
+            range
+        },
         positions: context
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

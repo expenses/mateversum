@@ -357,6 +357,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         multiview,
     );
 
+    let index_buffer = Rc::new(RefCell::new(IndexBuffer::new(1024, &device)));
+
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
         queue: Rc::clone(&queue),
@@ -396,6 +398,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         bc6h_supported: adapter
             .features()
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+        index_buffer: Rc::clone(&index_buffer),
     });
 
     let models = Rc::new(RefCell::new(slotmap::SlotMap::new()));
@@ -1100,6 +1103,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             Some(wgpu::Color::TRANSPARENT),
         );
 
+        let index_buffer = index_buffer.borrow();
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
             color_attachments: &[wgpu::RenderPassColorAttachment {
@@ -1125,6 +1130,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         render_pass.set_bind_group(0, &uniform_bind_group, &[]);
         render_pass.set_vertex_buffer(3, instance_buffer.buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
 
         if let Some((mirror_model, mirror_model_instances)) = mirror_model {
             let mirror_model = mirror_model.model.as_ref().unwrap();
@@ -1135,7 +1141,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             bind_model_buffers(&mut render_pass, mirror_model);
             render_pass.draw_indexed(
-                0..mirror_model.num_indices,
+                mirror_model.index_range.clone(),
                 0,
                 mirror_model_instances.clone(),
             );
@@ -1202,7 +1208,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 render_pass.set_pipeline(&pipelines.set_depth);
 
                 bind_model_buffers(&mut render_pass, mirror_model);
-                render_pass.draw_indexed(0..mirror_model.num_indices, 0, mirror_model_instances);
+                render_pass.draw_indexed(
+                    mirror_model.index_range.clone(),
+                    0,
+                    mirror_model_instances,
+                );
             }
         }
 
@@ -1277,7 +1287,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
 
-            render_pass.draw_indexed(0..ui_plane_model.num_indices, 0, ui_plane_instance_range);
+            render_pass.draw_indexed(
+                ui_plane_model.index_range.clone(),
+                0,
+                ui_plane_instance_range,
+            );
         }
 
         drop(render_pass);
@@ -1576,7 +1590,6 @@ fn bind_model_buffers<'a>(render_pass: &mut wgpu::RenderPass<'a>, model: &'a ass
     render_pass.set_vertex_buffer(0, model.positions.slice(..));
     render_pass.set_vertex_buffer(1, model.normals.slice(..));
     render_pass.set_vertex_buffer(2, model.uvs.slice(..));
-    render_pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
 }
 
 fn render_primitives<'a>(
@@ -1831,5 +1844,107 @@ impl InstanceBuffer {
 
         self.buffer = new_buffer;
         self.capacity = new_capacity;
+    }
+}
+
+struct IndexBuffer {
+    allocator: range_alloc::RangeAllocator<u32>,
+    buffer: wgpu::Buffer,
+    cpu_buffer: Vec<u8>,
+}
+
+impl IndexBuffer {
+    fn size_in_bytes(size: u32) -> u64 {
+        size as u64 * size_of::<u32>() as u64
+    }
+
+    fn new(capacity: u32, device: &wgpu::Device) -> Self {
+        Self {
+            allocator: range_alloc::RangeAllocator::new(0..capacity),
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("index buffer"),
+                size: Self::size_in_bytes(capacity),
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            cpu_buffer: vec![0; Self::size_in_bytes(capacity) as usize],
+        }
+    }
+
+    async fn insert(
+        &mut self,
+        indices: &[u32],
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        command_encoder: &mut wgpu::CommandEncoder,
+    ) -> Range<u32> {
+        if indices.is_empty() {
+            return 0..0;
+        }
+
+        let length = indices.len() as u32;
+
+        log::info!("{}", indices.len());
+
+        let range = match self.allocator.allocate_range(length) {
+            Ok(range) => range,
+            Err(_) => {
+                self.resize(length, device, queue, command_encoder).await;
+                self.allocator.allocate_range(length).expect("just resized")
+            }
+        };
+
+        log::info!("Writing");
+        queue.write_buffer(
+            &self.buffer,
+            Self::size_in_bytes(range.start),
+            bytemuck::cast_slice(indices),
+        );
+
+        self.cpu_buffer
+            [Self::size_in_bytes(range.start) as usize..Self::size_in_bytes(range.end) as usize]
+            .copy_from_slice(bytemuck::cast_slice(indices));
+
+        range
+    }
+
+    async fn resize(
+        &mut self,
+        required_capacity: u32,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _command_encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let old_capacity = self.allocator.initial_range().end;
+
+        let new_capacity = (old_capacity + required_capacity).max(old_capacity * 2);
+
+        log::info!(
+            "Growing index buffer from {} to {}",
+            old_capacity,
+            new_capacity
+        );
+
+        self.allocator.grow_to(new_capacity);
+
+        let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("index buffer"),
+            size: Self::size_in_bytes(new_capacity),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Can't do this in WebGL T_T
+        // Caused uvs to look messed up.
+        // command_encoder.copy_buffer_to_buffer(&self.buffer, 0, &new_buffer, 0, Self::size_in_bytes(old_capacity));
+
+        queue.write_buffer(&new_buffer, 0, &self.cpu_buffer);
+
+        let mut new_cpu_buffer = vec![0; Self::size_in_bytes(new_capacity) as usize];
+
+        new_cpu_buffer[0..self.cpu_buffer.len()].copy_from_slice(&self.cpu_buffer);
+
+        self.buffer = new_buffer;
+        self.cpu_buffer = new_cpu_buffer;
     }
 }
