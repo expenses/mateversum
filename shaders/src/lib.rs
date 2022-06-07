@@ -138,6 +138,11 @@ pub fn fragment(
         &material_settings,
     );
 
+    if material_settings.is_unlit != 0 {
+        *output = material_params.base.albedo_colour.extend(1.0);
+        return;
+    }
+
     let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
@@ -228,6 +233,11 @@ pub fn fragment_alpha_clipped(
         spirv_std::arch::kill();
     }
 
+    if material_settings.is_unlit != 0 {
+        *output = material_params.base.albedo_colour.extend(1.0);
+        return;
+    }
+
     let lut_values = glam_pbr::ggx_lut_lookup(
         normal,
         view,
@@ -266,41 +276,6 @@ pub fn fragment_alpha_clipped(
 }
 
 #[spirv(fragment)]
-pub fn fragment_unlit(
-    _position: Vec3,
-    _normal: Vec3,
-    uv: Vec2,
-    #[spirv(descriptor_set = 0, binding = 0, uniform)] _uniforms: &Uniforms,
-    #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 1)] _normal_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 4, uniform)] material_settings: &MaterialSettings,
-    #[spirv(descriptor_set = 1, binding = 5)] albedo_texture_sampler: &Sampler,
-    #[spirv(descriptor_set = 1, binding = 6)] _normal_texture_sampler: &Sampler,
-    #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
-    #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
-    output: &mut Vec4,
-) {
-    let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
-    let metallic_roughness_texture = TextureSampler::new(
-        metallic_roughness_texture,
-        *metallic_roughness_texture_sampler,
-        uv,
-    );
-    let emissive_texture = TextureSampler::new(emissive_texture, *emissive_texture_sampler, uv);
-
-    let material_params = ExtendedMaterialParams::new(
-        &albedo_texture,
-        &metallic_roughness_texture,
-        &emissive_texture,
-        &material_settings,
-    );
-
-    *output = material_params.base.albedo_colour.extend(1.0);
-}
-
-#[spirv(fragment)]
 pub fn fragment_ui(
     _position: Vec3,
     _normal: Vec3,
@@ -310,45 +285,6 @@ pub fn fragment_ui(
     output: &mut Vec4,
 ) {
     *output = TextureSampler::new(texture, *sampler, uv).sample();
-}
-
-#[spirv(fragment)]
-pub fn fragment_unlit_alpha_clipped(
-    _position: Vec3,
-    _normal: Vec3,
-    uv: Vec2,
-    #[spirv(descriptor_set = 0, binding = 0, uniform)] _uniforms: &Uniforms,
-    #[spirv(descriptor_set = 1, binding = 0)] albedo_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 1)] _normal_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 2)] metallic_roughness_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 3)] emissive_texture: &SampledImage,
-    #[spirv(descriptor_set = 1, binding = 4, uniform)] material_settings: &MaterialSettings,
-    #[spirv(descriptor_set = 1, binding = 5)] albedo_texture_sampler: &Sampler,
-    #[spirv(descriptor_set = 1, binding = 6)] _normal_texture_sampler: &Sampler,
-    #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
-    #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
-    output: &mut Vec4,
-) {
-    let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
-    let metallic_roughness_texture = TextureSampler::new(
-        metallic_roughness_texture,
-        *metallic_roughness_texture_sampler,
-        uv,
-    );
-    let emissive_texture = TextureSampler::new(emissive_texture, *emissive_texture_sampler, uv);
-
-    let material_params = ExtendedMaterialParams::new(
-        &albedo_texture,
-        &metallic_roughness_texture,
-        &emissive_texture,
-        &material_settings,
-    );
-
-    if material_params.alpha < 0.5 {
-        spirv_std::arch::kill();
-    }
-
-    *output = material_params.base.albedo_colour.extend(1.0);
 }
 
 fn linear_to_srgb_approx(color_linear: Vec3) -> Vec3 {

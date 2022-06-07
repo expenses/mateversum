@@ -990,7 +990,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         // We borrow all the bind groups here because they need to be borrowed for the entire duration of the render pass.
 
         let model_bind_groups = ModelBindGroups {
-            pbr_opaque: models
+            opaque: models
                 .values()
                 .map(|model| {
                     model
@@ -1001,35 +1001,13 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         .collect::<Vec<_>>()
                 })
                 .collect(),
-            pbr_alpha_clipped: models
+            alpha_clipped: models
                 .values()
                 .map(|model| {
                     model
                         .model
                         .iter()
                         .flat_map(|model| &model.alpha_clipped_primitives)
-                        .map(|primitive| primitive.bind_group.borrow())
-                        .collect::<Vec<_>>()
-                })
-                .collect(),
-            unlit_opaque: models
-                .values()
-                .map(|model| {
-                    model
-                        .model
-                        .iter()
-                        .flat_map(|model| &model.unlit_opaque_primitives)
-                        .map(|primitive| primitive.bind_group.borrow())
-                        .collect::<Vec<_>>()
-                })
-                .collect(),
-            unlit_alpha_clipped: models
-                .values()
-                .map(|model| {
-                    model
-                        .model
-                        .iter()
-                        .flat_map(|model| &model.unlit_alpha_clipped_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
@@ -1150,19 +1128,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     &model_instances,
                     |model| &model.opaque_primitives,
-                    &model_bind_groups.pbr_opaque,
-                    &heads_mirrored,
-                    &hands,
-                );
-
-                render_pass.set_pipeline(&pipelines.unlit.opaque_mirrored);
-
-                render_all(
-                    &mut render_pass,
-                    &models,
-                    &model_instances,
-                    |model| &model.unlit_opaque_primitives,
-                    &model_bind_groups.unlit_opaque,
+                    &model_bind_groups.opaque,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1174,19 +1140,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     &model_instances,
                     |model| &model.alpha_clipped_primitives,
-                    &model_bind_groups.pbr_alpha_clipped,
-                    &heads_mirrored,
-                    &hands,
-                );
-
-                render_pass.set_pipeline(&pipelines.unlit.alpha_clipped_mirrored);
-
-                render_all(
-                    &mut render_pass,
-                    &models,
-                    &model_instances,
-                    |model| &model.unlit_alpha_clipped_primitives,
-                    &model_bind_groups.unlit_alpha_clipped,
+                    &model_bind_groups.alpha_clipped,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1214,19 +1168,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 &model_instances,
                 |model| &model.opaque_primitives,
-                &model_bind_groups.pbr_opaque,
-                &heads,
-                &hands,
-            );
-
-            render_pass.set_pipeline(&pipelines.unlit.opaque);
-
-            render_all(
-                &mut render_pass,
-                &models,
-                &model_instances,
-                |model| &model.unlit_opaque_primitives,
-                &model_bind_groups.unlit_opaque,
+                &model_bind_groups.opaque,
                 &heads,
                 &hands,
             );
@@ -1238,19 +1180,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 &model_instances,
                 |model| &model.alpha_clipped_primitives,
-                &model_bind_groups.pbr_alpha_clipped,
-                &heads,
-                &hands,
-            );
-
-            render_pass.set_pipeline(&pipelines.unlit.alpha_clipped);
-
-            render_all(
-                &mut render_pass,
-                &models,
-                &model_instances,
-                |model| &model.unlit_alpha_clipped_primitives,
-                &model_bind_groups.unlit_alpha_clipped,
+                &model_bind_groups.alpha_clipped,
                 &heads,
                 &hands,
             );
@@ -1592,10 +1522,8 @@ fn render_primitives<'a>(
 }
 
 struct ModelBindGroups<'a> {
-    pbr_opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
-    pbr_alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
-    unlit_opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
-    unlit_alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
 }
 
 struct HeadOrHandsRenderingData<'a> {

@@ -117,7 +117,5 @@ naga = { git = "https://github.com/expenses/naga", branch = "webxr" }
 [workspace]
 members = [
   ".",
-  "shared-structs",
-  "shaders",
-  "rust-gpu-cli-builder",
+  "shared-structs"
 ]

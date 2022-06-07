@@ -4,3 +4,4 @@ web/pkg
 web/other_models
 /**/*.dds
 shaders/src/tonemapping.rs
+shaders/target

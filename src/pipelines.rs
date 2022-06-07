@@ -107,7 +107,6 @@ impl PipelineSet {
 
 pub(crate) struct Pipelines {
     pub(crate) pbr: PipelineSet,
-    pub(crate) unlit: PipelineSet,
     pub(crate) line: wgpu::RenderPipeline,
     pub(crate) stencil_write: wgpu::RenderPipeline,
     pub(crate) set_depth: wgpu::RenderPipeline,
@@ -433,32 +432,6 @@ impl Pipelines {
             stencil_write: stencil_write_pipeline,
             set_depth: set_depth_pipeline,
             tonemap: tonemap_pipeline,
-            unlit: PipelineSet::new(
-                device,
-                &model_pipeline_layout,
-                &mirrored_pipeline_layout,
-                vertex_state.clone(),
-                mirrored_vertex,
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment_unlit", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_unlit.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_unlit",
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment_unlit_alpha_clipped", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_unlit_alpha_clipped.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_unlit_alpha_clipped",
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
-                multiview,
-            ),
             ui: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("ui pipeline"),
                 layout: Some(&ui_pipeline_layout),

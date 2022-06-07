@@ -14,8 +14,6 @@ done;
 glslc granite-shaders/bc6.frag -o compiled-shaders/bc6.spv
 spirv-opt compiled-shaders/bc6.spv -O -o compiled-shaders/bc6.spv
 
-spirv-location-injector compiled-shaders/vertex.spv compiled-shaders/fragment_unlit.spv compiled-shaders/fragment_unlit.spv
-spirv-location-injector compiled-shaders/vertex.spv compiled-shaders/fragment_unlit_alpha_clipped.spv compiled-shaders/fragment_unlit_alpha_clipped.spv
 spirv-location-injector compiled-shaders/vertex.spv compiled-shaders/fragment_ui.spv compiled-shaders/fragment_ui.spv
 spirv-location-injector compiled-shaders/vertex.spv compiled-shaders/flat_blue.spv compiled-shaders/flat_blue.spv
 spirv-location-injector compiled-shaders/fullscreen_tri.spv compiled-shaders/bc6.spv compiled-shaders/bc6.spv
