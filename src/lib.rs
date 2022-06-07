@@ -80,7 +80,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .fetch_bytes_without_caching(
                 &url::Url::options()
                     .base_url(Some(&href))
-                    .parse("sponza_with_mirror.json")
+                    .parse("ipfs_demo.json")
                     .unwrap(),
                 None,
             )
@@ -437,7 +437,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let hand_model = {
         let url = url::Url::options()
             .base_url(Some(&href))
-            .parse("controller_model/controller.gltf")
+            .parse("ipfs://QmaLnMLiJBAf442UPcVA9QAviuVgNPdmnAHK3k9vhYoMJU/controller.gltf")
             .map_err(|err| err.to_string())?;
 
         let bytes = context
@@ -454,7 +454,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let head_model = {
         let url = url::Url::options()
             .base_url(Some(&href))
-            .parse("glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf")
+            .parse("ipfs://QmasL959Cbw4aJh1gQ6iABpwZswz9KTEKRQpdYGkFbXXH6/DamagedHelmet.gltf")
             .map_err(|err| err.to_string())?;
 
         let bytes = context
@@ -492,7 +492,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let ui_plane_model = {
         let url = url::Url::options()
             .base_url(Some(&href))
-            .parse("ui/ui_plane.gltf")
+            .parse("ipfs://QmNtGM78Q7auL4kNT4twn9qJGAmmLTfvh2qS8nwgciJQem/ui_plane.gltf")
             .unwrap();
 
         let bytes = context

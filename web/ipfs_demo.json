@@ -1,7 +1,7 @@
 {
   "models": [
     {
-      "url": "ipfs://QmQqYLvBEvJphFNRRnrt1aapR6CoEsxEN1D4Z2wQWaTJXA/glTF/Sponza.gltf",
+      "url": "ipfs://Qmd6uZnv4Edj8NDrGWNzWGmqSa4T631HnC4u8Bdyvaa1qe/Sponza.gltf",
       "position": [
         0,
         0,
@@ -9,12 +9,33 @@
       ]
     },
     {
-      "url": "https://sponza.s3.eu-central-1.amazonaws.com/NewSponza_CypressTree_glTF.gltf",
+      "url": "ipfs://QmPdXFiTsArpHqs3hUnfJNz6WTaCTpG8FaGmPie9fpd6j1/rim.gltf",
       "position": [
-        -2,
-        0,
-        0
+        -1.8,
+        2.25,
+        -0.75
+      ],
+      "rotation": [
+          0.0,
+          45.0,
+          0.0
       ]
     }
-  ]
+  ],
+  "mirror": {
+    "url": "ipfs://QmPdXFiTsArpHqs3hUnfJNz6WTaCTpG8FaGmPie9fpd6j1/mirror_inner.gltf",
+    "position": [
+      -1.8,
+      2.25,
+      -0.75
+    ],
+    "rotation": [
+        0.0,
+        45.0,
+        0.0
+    ]
+  },
+  "ibl_lut": "ipfs://QmYTAgb35ChkB8st4mfoR38Ks5LEgjYUSDdquDFVRR6VQ3",
+  "specular_ibl_cubemap": "ipfs://QmfV1ZxQvW9xLdnRq4hPH7JDfJhJ26AV7eiLWrXVTVtrgz/specular_compressed.ktx2",
+  "diffuse_ibl_cubemap": "ipfs://QmfV1ZxQvW9xLdnRq4hPH7JDfJhJ26AV7eiLWrXVTVtrgz/diffuse_compressed.ktx2"
 }
