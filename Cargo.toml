@@ -100,13 +100,14 @@ features = [
   'ResponseInit',
   'HtmlBrElement',
   'DomPointInit',
+  'Gamepad'
 ]
 
 [patch.crates-io]
-web-sys = { git = "https://github.com/rustwasm/wasm-bindgen" }
-wasm-bindgen = { git = "https://github.com/rustwasm/wasm-bindgen" }
-wasm-bindgen-shared = { git = "https://github.com/rustwasm/wasm-bindgen" }
-js-sys = { git = "https://github.com/rustwasm/wasm-bindgen" }
+web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
+wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
+wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
+js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
 glow = { git = "https://github.com/expenses/glow", branch = "webxr" }
 wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }

@@ -655,6 +655,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let bind_group_cache = ResourceCache::default();
 
     let mut offset = Vec3::ZERO;
+    let mut orientation = glam::Quat::IDENTITY;
 
     let egui_ctx = egui::Context::default();
     let mut egui_renderer =
@@ -691,21 +692,16 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let egui_primitives = egui_ctx.tessellate(egui_output.shapes);
         egui_renderer.update_buffers(&device, &queue, &egui_primitives, &screen_descriptor);
 
-        let movement = movement.borrow();
-
-        if let Some(movement) = movement.as_ref() {
+        if let Some(movement) = movement.borrow().as_ref() {
             offset += *movement * 2.0 / 60.0;
         }
 
-        let mut js_offset = web_sys::DomPointInit::new();
-
-        js_offset
-            .x(offset.x as f64)
-            .y(offset.y as f64)
-            .z(offset.z as f64);
-
         let reference_space = reference_space.get_offset_reference_space(
-            &web_sys::XrRigidTransform::new_with_position(&js_offset).unwrap(),
+            &web_sys::XrRigidTransform::new_with_position_and_orientation(
+                &vec_to_dom_point(-orientation * offset),
+                &quat_to_dom_point(-orientation),
+            )
+            .unwrap(),
         );
 
         let models = models.borrow();
@@ -734,6 +730,23 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     let instance = Instance::from_transform(transform, 1.0);
                     player_state.hands[i as usize] = instance;
                     line_verts[i as usize * 2].position = instance.position;
+                }
+            }
+
+            if let Some(gamepad) = input_source.gamepad() {
+                let axes = gamepad.axes();
+
+                if let Some((x, y)) = axes
+                    .get(2)
+                    .as_f64()
+                    .and_then(|x| axes.get(3).as_f64().map(|y| ((x, y))))
+                {
+                    if i == 0 {
+                        *movement.borrow_mut() =
+                            Some(player_state.head.rotation * Vec3::new(-x as f32, 0.0, -y as f32));
+                    } else if i == 1 {
+                        orientation *= glam::Quat::from_rotation_y(x as f32 * 0.1 * (2.0 / 3.0));
+                    }
                 }
             }
         }
@@ -774,23 +787,21 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             let parse_matrix = |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
 
             let left_proj = parse_matrix(views[0].projection_matrix());
-            let left_inv = parse_matrix(views[0].transform().inverse().matrix());
+            let left_inv = parse_matrix(views[0].transform().matrix()).inverse();
 
             let left_projection_view = (left_proj * left_inv).into();
-            let left_eye_position = {
-                let p = views[0].transform().position();
-                glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-            };
+            let left_instance = Instance::from_transform(views[0].transform(), 0.0);
 
-            let (right_projection_view, right_proj, right_eye_position) =
+            let (right_projection_view, right_proj, right_instance) =
                 if let Some(right_view) = views.get(1) {
-                    let right_inv = parse_matrix(right_view.transform().inverse().matrix());
+                    let right_inv = parse_matrix(right_view.transform().matrix()).inverse();
                     let right_proj = parse_matrix(right_view.projection_matrix());
 
-                    ((right_proj * right_inv).into(), right_proj, {
-                        let p = right_view.transform().position();
-                        glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                    })
+                    (
+                        (right_proj * right_inv).into(),
+                        right_proj,
+                        Instance::from_transform(right_view.transform(), 0.0),
+                    )
                 } else {
                     Default::default()
                 };
@@ -802,8 +813,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &shared_structs::Uniforms {
                         left_projection_view,
                         right_projection_view,
-                        left_eye_position,
-                        right_eye_position,
+                        left_eye_position: left_instance.position,
+                        right_eye_position: right_instance.position,
                     }
                     .as_std140(),
                 ),
@@ -816,15 +827,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &shared_structs::SkyboxUniforms {
                         left_projection_inverse: left_proj.inverse().into(),
                         right_projection_inverse: right_proj.inverse().into(),
-                        left_view_inverse: Instance::from_transform(views[0].transform(), 1.0)
-                            .rotation
-                            .into(),
-                        right_view_inverse: Instance::from_transform(
-                            views.get(1).unwrap_or(&views[0]).transform(),
-                            1.0,
-                        )
-                        .rotation
-                        .into(),
+                        left_view_inverse: left_instance.rotation.into(),
+                        right_view_inverse: right_instance.rotation.into(),
                     }
                     .as_std140(),
                 ),
@@ -1460,18 +1464,22 @@ impl Instance {
     }
 
     pub fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
-        let position = transform.position();
         let rotation = transform.orientation();
 
-        let position = glam::DVec3::new(position.x(), position.y(), position.z());
         let rotation =
             glam::DQuat::from_xyzw(rotation.x(), rotation.y(), rotation.z(), rotation.w());
         Self {
-            position: position.as_vec3(),
+            position: transform_to_position_vec3(&transform),
             rotation: rotation.as_f32(),
             scale,
         }
     }
+}
+
+fn transform_to_position_vec3(transform: &web_sys::XrRigidTransform) -> Vec3 {
+    let position = transform.position();
+    let position = glam::DVec3::new(position.x(), position.y(), position.z());
+    position.as_vec3()
 }
 
 impl Default for Instance {
@@ -1760,4 +1768,24 @@ impl InstanceBuffer {
         self.buffer = new_buffer;
         self.capacity = new_capacity;
     }
+}
+
+fn vec_to_dom_point(vec: Vec3) -> web_sys::DomPointInit {
+    let mut dom_point = web_sys::DomPointInit::new();
+
+    dom_point.x(vec.x as f64).y(vec.y as f64).z(vec.z as f64);
+
+    dom_point
+}
+
+fn quat_to_dom_point(quat: glam::Quat) -> web_sys::DomPointInit {
+    let mut dom_point = web_sys::DomPointInit::new();
+
+    dom_point
+        .x(quat.x as f64)
+        .y(quat.y as f64)
+        .z(quat.z as f64)
+        .w(quat.w as f64);
+
+    dom_point
 }
