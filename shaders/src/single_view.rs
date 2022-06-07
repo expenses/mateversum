@@ -117,17 +117,6 @@ pub fn fragment_alpha_clipped(
 }
 
 #[spirv(vertex)]
-pub fn line_vertex(
-    position: Vec3,
-    colour: Vec3,
-    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
-    #[spirv(position)] builtin_pos: &mut Vec4,
-    out_colour: &mut Vec3,
-) {
-    super::line_vertex(position, colour, uniforms, builtin_pos, 0, out_colour);
-}
-
-#[spirv(vertex)]
 pub fn vertex_mirrored(
     position: Vec3,
     normal: Vec3,

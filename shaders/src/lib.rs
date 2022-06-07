@@ -17,7 +17,7 @@ type SampledImage = Image!(2D, type=f32, sampled);
 mod single_view;
 
 pub use single_view::{
-    fragment as _, fragment_alpha_clipped as _, line_vertex as _, tonemap as _, vertex as _,
+    fragment as _, fragment_alpha_clipped as _, tonemap as _, vertex as _,
     vertex_mirrored as _, vertex_skybox as _, vertex_skybox_mirrored as _,
 };
 
@@ -348,24 +348,6 @@ pub fn blit(
 ) {
     uv.y = 1.0 - uv.y;
     *output = texture.sample_by_lod(*sampler, uv, 0.0);
-}
-
-#[spirv(vertex)]
-pub fn line_vertex(
-    position: Vec3,
-    colour: Vec3,
-    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
-    #[spirv(position)] builtin_pos: &mut Vec4,
-    #[spirv(view_index)] view_index: i32,
-    out_colour: &mut Vec3,
-) {
-    *builtin_pos = uniforms.projection_view(view_index) * position.extend(1.0);
-    *out_colour = colour;
-}
-
-#[spirv(fragment)]
-pub fn flat_colour(colour: Vec3, output: &mut Vec4) {
-    *output = colour.extend(1.0);
 }
 
 #[spirv(vertex)]

@@ -107,7 +107,6 @@ impl PipelineSet {
 
 pub(crate) struct Pipelines {
     pub(crate) pbr: PipelineSet,
-    pub(crate) line: wgpu::RenderPipeline,
     pub(crate) stencil_write: wgpu::RenderPipeline,
     pub(crate) set_depth: wgpu::RenderPipeline,
     pub(crate) tonemap: wgpu::RenderPipeline,
@@ -196,48 +195,6 @@ impl Pipelines {
             bias: wgpu::DepthBiasState::default(),
             stencil: wgpu::StencilState::default(),
         };
-
-        let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("line pipeline layout"),
-            bind_group_layouts: &[uniform_bgl],
-            push_constant_ranges: &[],
-        });
-
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("line pipeline"),
-            layout: Some(&line_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: shader_cache.get("line_vertex", || {
-                    device.create_shader_module(&if multiview.is_none() {
-                        wgpu::include_spirv!("../compiled-shaders/single_view_line_vertex.spv")
-                    } else {
-                        wgpu::include_spirv!("../compiled-shaders/line_vertex.spv")
-                    })
-                }),
-                entry_point: &format!("{}line_vertex", prefix),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 6 * 4,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: shader_cache.get("flat_colour", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/flat_colour.spv"
-                    ))
-                }),
-                entry_point: "flat_colour",
-                targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(normal_depth_state.clone()),
-            multisample: Default::default(),
-            multiview,
-        });
 
         let tonemap_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -428,7 +385,6 @@ impl Pipelines {
                 },
                 multiview,
             ),
-            line: line_pipeline,
             stencil_write: stencil_write_pipeline,
             set_depth: set_depth_pipeline,
             tonemap: tonemap_pipeline,

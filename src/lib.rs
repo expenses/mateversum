@@ -599,31 +599,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }],
     });
 
-    let mut line_verts = [
-        LineVertex {
-            position: -Vec3::ONE,
-            colour: Vec3::X,
-        },
-        LineVertex {
-            position: Vec3::ONE,
-            colour: Vec3::Y,
-        },
-        LineVertex {
-            position: Vec3::new(-1.0, 1.0, -1.0),
-            colour: Vec3::Z,
-        },
-        LineVertex {
-            position: -Vec3::new(-1.0, 1.0, -1.0),
-            colour: Vec3::ONE - Vec3::Z,
-        },
-    ];
-
-    let line_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("line buffer"),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
-        contents: bytemuck::cast_slice(&line_verts),
-    });
-
     let mirror_instance = world
         .mirror
         .as_ref()
@@ -729,7 +704,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     let transform = grip_pose.transform();
                     let instance = Instance::from_transform(transform, 1.0);
                     player_state.hands[i as usize] = instance;
-                    line_verts[i as usize * 2].position = instance.position;
                 }
             }
 
@@ -847,8 +821,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     .call1(&wasm_bindgen::JsValue::undefined(), &uint8)
                     .unwrap();
             }
-
-            queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
         let framebuffer = js_sys::Reflect::get(&base_layer, &"framebuffer".into())
@@ -1191,12 +1163,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }
 
         {
-            render_pass.set_pipeline(&pipelines.line);
-            render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-            render_pass.draw(0..4, 0..1);
-        }
-
-        {
             render_pass.set_pipeline(&pipelines.skybox);
             render_pass.set_bind_group(1, &skybox_uniform_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
@@ -1486,13 +1452,6 @@ impl Default for Instance {
     fn default() -> Self {
         Self::new(Vec3::ZERO, 1.0, glam::Quat::IDENTITY)
     }
-}
-
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-pub struct LineVertex {
-    pub position: Vec3,
-    pub colour: Vec3,
 }
 
 fn cast_slice<F, T>(slice: &[F]) -> &[T] {
