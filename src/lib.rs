@@ -988,6 +988,28 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         .collect::<Vec<_>>()
                 })
                 .collect(),
+            opaque_double_sided: models
+                .values()
+                .map(|model| {
+                    model
+                        .model
+                        .iter()
+                        .flat_map(|model| &model.opaque_double_sided_primitives)
+                        .map(|primitive| primitive.bind_group.borrow())
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            alpha_clipped_double_sided: models
+                .values()
+                .map(|model| {
+                    model
+                        .model
+                        .iter()
+                        .flat_map(|model| &model.alpha_clipped_double_sided_primitives)
+                        .map(|primitive| primitive.bind_group.borrow())
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
         };
 
         let head_primitives = head_model
@@ -1109,6 +1131,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &hands,
                 );
 
+                render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque_mirrored);
+
+                render_all(
+                    &mut render_pass,
+                    &models,
+                    &model_instances,
+                    |model| &model.opaque_double_sided_primitives,
+                    &model_bind_groups.opaque_double_sided,
+                    &heads_mirrored,
+                    &hands,
+                );
+
                 render_pass.set_pipeline(&pipelines.pbr.alpha_clipped_mirrored);
 
                 render_all(
@@ -1117,6 +1151,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &model_instances,
                     |model| &model.alpha_clipped_primitives,
                     &model_bind_groups.alpha_clipped,
+                    &heads_mirrored,
+                    &hands,
+                );
+
+                render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped_mirrored);
+
+                render_all(
+                    &mut render_pass,
+                    &models,
+                    &model_instances,
+                    |model| &model.alpha_clipped_double_sided_primitives,
+                    &model_bind_groups.alpha_clipped_double_sided,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1149,6 +1195,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &hands,
             );
 
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
+
+            render_all(
+                &mut render_pass,
+                &models,
+                &model_instances,
+                |model| &model.opaque_double_sided_primitives,
+                &model_bind_groups.opaque_double_sided,
+                &heads,
+                &hands,
+            );
+
             render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
 
             render_all(
@@ -1157,6 +1215,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &model_instances,
                 |model| &model.alpha_clipped_primitives,
                 &model_bind_groups.alpha_clipped,
+                &heads,
+                &hands,
+            );
+
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
+
+            render_all(
+                &mut render_pass,
+                &models,
+                &model_instances,
+                |model| &model.alpha_clipped_double_sided_primitives,
+                &model_bind_groups.alpha_clipped_double_sided,
                 &heads,
                 &hands,
             );
@@ -1491,6 +1561,8 @@ fn render_primitives<'a>(
 struct ModelBindGroups<'a> {
     opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
     alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    opaque_double_sided: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    alpha_clipped_double_sided: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
 }
 
 struct HeadOrHandsRenderingData<'a> {

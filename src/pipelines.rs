@@ -17,10 +17,15 @@ impl PipelineSet {
         opaque_fragment: wgpu::FragmentState,
         alpha_clipped_fragment: wgpu::FragmentState,
         multiview: Option<std::num::NonZeroU32>,
+        double_sided: bool,
     ) -> Self {
         let normal_primitive_state = wgpu::PrimitiveState {
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: if !double_sided {
+                Some(wgpu::Face::Back)
+            } else {
+                None
+            },
             ..Default::default()
         };
 
@@ -107,6 +112,7 @@ impl PipelineSet {
 
 pub(crate) struct Pipelines {
     pub(crate) pbr: PipelineSet,
+    pub(crate) pbr_double_sided: PipelineSet,
     pub(crate) stencil_write: wgpu::RenderPipeline,
     pub(crate) set_depth: wgpu::RenderPipeline,
     pub(crate) tonemap: wgpu::RenderPipeline,
@@ -352,6 +358,32 @@ impl Pipelines {
                 push_constant_ranges: &[],
             });
 
+        let fragment_opaque = wgpu::FragmentState {
+            module: shader_cache.get("fragment", || {
+                device.create_shader_module(&if multiview.is_none() {
+                    wgpu::include_spirv!("../compiled-shaders/single_view_fragment.spv")
+                } else {
+                    wgpu::include_spirv!("../compiled-shaders/fragment.spv")
+                })
+            }),
+            entry_point: &format!("{}fragment", prefix),
+            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+        };
+
+        let fragment_alpha_clipped = wgpu::FragmentState {
+            module: shader_cache.get("fragment_alpha_clipped", || {
+                device.create_shader_module(&if multiview.is_none() {
+                    wgpu::include_spirv!(
+                        "../compiled-shaders/single_view_fragment_alpha_clipped.spv"
+                    )
+                } else {
+                    wgpu::include_spirv!("../compiled-shaders/fragment_alpha_clipped.spv")
+                })
+            }),
+            entry_point: &format!("{}fragment_alpha_clipped", prefix),
+            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+        };
+
         Self {
             pbr: PipelineSet::new(
                 device,
@@ -359,31 +391,21 @@ impl Pipelines {
                 &mirrored_pipeline_layout,
                 vertex_state.clone(),
                 mirrored_vertex.clone(),
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment", || {
-                        device.create_shader_module(&if multiview.is_none() {
-                            wgpu::include_spirv!("../compiled-shaders/single_view_fragment.spv")
-                        } else {
-                            wgpu::include_spirv!("../compiled-shaders/fragment.spv")
-                        })
-                    }),
-                    entry_point: &format!("{}fragment", prefix),
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment_alpha_clipped", || {
-                        device.create_shader_module(&if multiview.is_none() {
-                            wgpu::include_spirv!(
-                                "../compiled-shaders/single_view_fragment_alpha_clipped.spv"
-                            )
-                        } else {
-                            wgpu::include_spirv!("../compiled-shaders/fragment_alpha_clipped.spv")
-                        })
-                    }),
-                    entry_point: &format!("{}fragment_alpha_clipped", prefix),
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
+                fragment_opaque.clone(),
+                fragment_alpha_clipped.clone(),
                 multiview,
+                false,
+            ),
+            pbr_double_sided: PipelineSet::new(
+                device,
+                &model_pipeline_layout,
+                &mirrored_pipeline_layout,
+                vertex_state.clone(),
+                mirrored_vertex.clone(),
+                fragment_opaque.clone(),
+                fragment_alpha_clipped.clone(),
+                multiview,
+                true,
             ),
             stencil_write: stencil_write_pipeline,
             set_depth: set_depth_pipeline,
