@@ -14,7 +14,7 @@ log = "0.4.17"
 wasm-bindgen-futures = "0.4.30"
 wgpu = { version = "0.12.0", features = ["webgl", "spirv"] }
 futures = { version = "0.3.21", default-features = false }
-gltf = { version = "1.0.0", features = ["KHR_materials_unlit"], default-features = false }
+gltf = { git = "https://github.com/expenses/gltf", branch = "third-party-extensions", features = ["KHR_materials_unlit"], default-features = false }
 gltf-helpers = { git = "https://github.com/expenses/kiss-engine", branch = "working-on-real-hw" }
 glam = "0.20.5"
 bytemuck = { version = "1.9.1", features = ["derive"] }
@@ -40,6 +40,7 @@ serde_json = "1.0.81"
 egui-wgpu = { git = "https://github.com/expenses/egui", branch = "fixes" }
 egui = { git = "https://github.com/expenses/egui", branch = "fixes" }
 slotmap = "1.0.6"
+vrm-gltf = { path = "vrm-gltf" }
 
 [dependencies.web-sys]
 version = "0.3.57"
@@ -118,5 +119,6 @@ naga = { git = "https://github.com/expenses/naga", branch = "webxr" }
 [workspace]
 members = [
   ".",
-  "shared-structs"
+  "shared-structs",
+  "vrm-gltf"
 ]

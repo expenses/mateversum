@@ -317,6 +317,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 sampler_entry(6),
                 sampler_entry(7),
                 sampler_entry(8),
+                texture_entry(9),
+                sampler_entry(10),
             ],
         }),
     );

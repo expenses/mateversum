@@ -520,19 +520,19 @@ dependencies = [
 [[package]]
 name = "gltf"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00e0a0eace786193fc83644907097285396360e9e82e30f81a21e9b1ba836a3e"
+source = "git+https://github.com/expenses/gltf?branch=third-party-extensions#64f5eea16144f5ba820c1b2a09dd6e61338a903f"
 dependencies = [
  "byteorder",
+ "gltf-derive",
  "gltf-json",
  "lazy_static",
+ "urlencoding",
 ]
 
 [[package]]
 name = "gltf-derive"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd53d6e284bb2bf02a6926e4cc4984978c1990914d6cd9deae4e31cf37cd113"
+source = "git+https://github.com/expenses/gltf?branch=third-party-extensions#64f5eea16144f5ba820c1b2a09dd6e61338a903f"
 dependencies = [
  "inflections",
  "proc-macro2",
@@ -543,7 +543,7 @@ dependencies = [
 [[package]]
 name = "gltf-helpers"
 version = "0.1.0"
-source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#ddb3e4f3f5292863aad8f5aca14999a9cc309eaf"
+source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#d1992ac3e5857006e3782d77574693311325d811"
 dependencies = [
  "bytemuck",
  "glam",
@@ -555,8 +555,7 @@ dependencies = [
 [[package]]
 name = "gltf-json"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9949836a9ec5e7f83f76fb9bbcbc77f254a577ebbdb0820867bc11979ef97cad"
+source = "git+https://github.com/expenses/gltf?branch=third-party-extensions#64f5eea16144f5ba820c1b2a09dd6e61338a903f"
 dependencies = [
  "gltf-derive",
  "serde",
@@ -806,6 +805,7 @@ dependencies = [
  "shared-structs",
  "slotmap",
  "url",
+ "vrm-gltf",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-futures-executor",
@@ -1328,10 +1328,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlencoding"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68b90931029ab9b034b300b797048cf23723400aa757e8a2bfb9d748102f9821"
+
+[[package]]
 name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "vrm-gltf"
+version = "0.1.0"
+dependencies = [
+ "gltf",
+ "serde",
+]
 
 [[package]]
 name = "wasi"
@@ -1420,7 +1434,7 @@ dependencies = [
 [[package]]
 name = "wasm-web-helpers"
 version = "0.1.0"
-source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#ddb3e4f3f5292863aad8f5aca14999a9cc309eaf"
+source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#d1992ac3e5857006e3782d77574693311325d811"
 dependencies = [
  "web-sys",
 ]
