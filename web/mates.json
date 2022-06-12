@@ -1,4 +1,8 @@
 {
+
+  "ibl_lut": "environment_maps/lut_ggx.ktx2",
+  "specular_ibl_cubemap": "environment_maps/helipad/specular_compressed.ktx2",
+  "diffuse_ibl_cubemap": "environment_maps/helipad/diffuse_compressed.ktx2",
   "models": [
     {
       "url": "ipfs://QmQqYLvBEvJphFNRRnrt1aapR6CoEsxEN1D4Z2wQWaTJXA/glTF/Sponza.gltf",

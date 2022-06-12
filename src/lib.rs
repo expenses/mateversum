@@ -75,33 +75,27 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let request_client = crate::assets::RequestClient::new(cache).map_err(|err| err.to_string())?;
 
-    let mut world: World = serde_json::from_slice(
+    let mut world_url = url::Url::options()
+        .base_url(Some(&href))
+        .parse("sponza_with_mirror.json")
+        .unwrap();
+
+    for (key, value) in href.query_pairs() {
+        if key == "world" {
+            world_url = url::Url::options()
+                .base_url(Some(&href))
+                .parse(&value)
+                .unwrap();
+        }
+    }
+
+    let world: World = serde_json::from_slice(
         &request_client
-            .fetch_bytes_without_caching(
-                &url::Url::options()
-                    .base_url(Some(&href))
-                    .parse("sponza_with_mirror.json")
-                    .unwrap(),
-                None,
-            )
+            .fetch_bytes_without_caching(&world_url, None)
             .await
             .map_err(|err| err.to_string())?,
     )
     .map_err(|err| format!("Failed to parse model ref json: {}", err))?;
-
-    for (key, value) in href.query_pairs() {
-        if key == "model" {
-            world.models.push(ModelReference {
-                url: url::Url::options()
-                    .base_url(Some(&href))
-                    .parse(&value)
-                    .unwrap(),
-                position: [0.0; 3],
-                rotation: [0.0; 3],
-                scale: 1.0,
-            });
-        }
-    }
 
     let vr_button = create_button("Start VR");
     let ar_button = create_button("Start AR");
