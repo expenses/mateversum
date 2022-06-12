@@ -1,0 +1,10 @@
+[package]
+name = "vrm-gltf"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+gltf = { git = "https://github.com/expenses/gltf", branch = "third-party-extensions", default-features = false }
+serde = { version = "1.0.137", features = ["derive"] }

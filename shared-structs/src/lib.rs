@@ -86,11 +86,26 @@ impl From<Mat4> for FlatMat4 {
 
 #[cfg_attr(not(target_arch = "spirv"), derive(AsStd140))]
 pub struct MaterialSettings {
+    pub toon_shading: ToonShadingSettings,
     pub base_color_factor: Vec4,
     pub emissive_factor: Vec3,
     pub metallic_factor: f32,
     pub roughness_factor: f32,
-    pub is_unlit: u32,
+    pub mode: u32,
+}
+
+#[cfg_attr(not(target_arch = "spirv"), derive(AsStd140, Debug))]
+#[derive(Default)]
+pub struct ToonShadingSettings {
+    pub shade_colour_factor: Vec3,
+    pub shift_factor: f32,
+    pub toony_factor: f32,
+}
+
+pub mod mode {
+    pub const PBR: u32 = 0;
+    pub const UNLIT: u32 = 1;
+    pub const TOON: u32 = 2;
 }
 
 // https://docs.gl/sl4/reflect

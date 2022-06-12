@@ -17,8 +17,8 @@ type SampledImage = Image!(2D, type=f32, sampled);
 mod single_view;
 
 pub use single_view::{
-    fragment as _, fragment_alpha_clipped as _, tonemap as _, vertex as _,
-    vertex_mirrored as _, vertex_skybox as _, vertex_skybox_mirrored as _,
+    fragment as _, fragment_alpha_clipped as _, tonemap as _, vertex as _, vertex_mirrored as _,
+    vertex_skybox as _, vertex_skybox_mirrored as _,
 };
 
 #[spirv(vertex)]
@@ -119,6 +119,8 @@ pub fn fragment(
     #[spirv(descriptor_set = 1, binding = 6)] normal_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 9)] toon_shade_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 10)] toon_shade_texture_sampler: &Sampler,
     #[spirv(view_index)] view_index: i32,
     output: &mut Vec4,
 ) {
@@ -138,15 +140,31 @@ pub fn fragment(
         &material_settings,
     );
 
-    if material_settings.is_unlit != 0 {
-        *output = material_params.base.albedo_colour.extend(1.0);
-        return;
-    }
-
     let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
     let view = glam_pbr::View(view_vector);
+
+    if material_settings.mode == shared_structs::mode::UNLIT {
+        *output = material_params.base.albedo_colour.extend(1.0);
+        return;
+    } else if material_settings.mode == shared_structs::mode::TOON {
+        let toon_shade_texture_sample =
+            TextureSampler::new(toon_shade_texture, *toon_shade_texture_sampler, uv)
+                .sample()
+                .truncate();
+
+        *output = toon_shading(
+            glam_pbr::Light(Vec3::ONE.normalize()),
+            normal,
+            toon_shade_texture_sample,
+            material_params.base,
+            &material_settings.toon_shading,
+            Vec3::ONE,
+        )
+        .extend(1.0);
+        return;
+    }
 
     let lut_values = glam_pbr::ggx_lut_lookup(
         normal,
@@ -204,6 +222,8 @@ pub fn fragment_alpha_clipped(
     #[spirv(descriptor_set = 1, binding = 6)] normal_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 9)] toon_shade_texture: &SampledImage,
+    #[spirv(descriptor_set = 1, binding = 10)] toon_shade_texture_sampler: &Sampler,
     #[spirv(view_index)] view_index: i32,
     output: &mut Vec4,
 ) {
@@ -228,13 +248,29 @@ pub fn fragment_alpha_clipped(
     let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
     let view = glam_pbr::View(view_vector);
 
+    let toon_shade_texture_sample =
+        TextureSampler::new(toon_shade_texture, *toon_shade_texture_sampler, uv)
+            .sample()
+            .truncate();
+
     // We can only do this after we've sampled all textures for naga control flow reasons.
     if material_params.alpha < 0.5 {
         spirv_std::arch::kill();
     }
 
-    if material_settings.is_unlit != 0 {
+    if material_settings.mode == shared_structs::mode::UNLIT {
         *output = material_params.base.albedo_colour.extend(1.0);
+        return;
+    } else if material_settings.mode == shared_structs::mode::TOON {
+        *output = toon_shading(
+            glam_pbr::Light(Vec3::ONE.normalize()),
+            normal,
+            toon_shade_texture_sample,
+            material_params.base,
+            &material_settings.toon_shading,
+            Vec3::ONE,
+        )
+        .extend(1.0);
         return;
     }
 
@@ -484,4 +520,26 @@ pub fn fragment_skybox(
     let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, 0.0);
 
     *output = sample.truncate().extend(1.0);
+}
+
+fn toon_shading(
+    light: glam_pbr::Light,
+    normal: glam_pbr::Normal,
+    toon_shade_texture_sample: Vec3,
+    material_params: glam_pbr::MaterialParams,
+    toon_shading_settings: &shared_structs::ToonShadingSettings,
+    light_colour: Vec3,
+) -> Vec3 {
+    fn linearstep(a: f32, b: f32, t: f32) -> f32 {
+        ((t - a) / (b - a)).min(1.0).max(0.0)
+    }
+
+    let shading = glam_pbr::Dot::new(&light, &normal);
+    let shading = shading.value + toon_shading_settings.shift_factor;
+    let toony_factor = toon_shading_settings.toony_factor;
+    let shading = linearstep(-1.0 + toony_factor, 1.0 - toony_factor, shading);
+
+    let shade_colour = toon_shade_texture_sample * toon_shading_settings.shade_colour_factor;
+
+    material_params.albedo_colour.lerp(shade_colour, shading) * light_colour
 }

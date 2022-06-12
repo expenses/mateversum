@@ -1,8 +1,9 @@
 use crate::PerformanceSettings;
 use crevice::std140::AsStd140;
-use glam::{Vec2, Vec3};
+use glam::{Vec2, Vec3, Vec4};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Read;
 use std::num::NonZeroU32;
 use std::ops::Range;
@@ -57,10 +58,11 @@ struct MaterialTextures {
     albedo_texture: MaterialTexture,
     metallic_roughness_texture: MaterialTexture,
     emissive_texture: MaterialTexture,
+    toon_shade_texture: MaterialTexture,
 }
 
 struct TextureLoadContext {
-    gltf: Rc<gltf::Gltf>,
+    gltf: Rc<gltf::Gltf<GltfExtensions>>,
     context: Rc<ModelLoadContext>,
     buffers: Rc<ModelBuffers>,
     textures: Rc<MaterialTextures>,
@@ -70,7 +72,7 @@ struct TextureLoadContext {
 }
 
 async fn upload_model_texture_from_gltf(
-    gltf_texture: &gltf::Texture<'_>,
+    gltf_texture: &gltf::Texture<'_, GltfExtensions>,
     binding: &MaterialTexture,
     srgb: bool,
     context: &TextureLoadContext,
@@ -153,6 +155,18 @@ fn create_model_bind_group(
                         &textures.emissive_texture.sampler.borrow(),
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(
+                        &textures.toon_shade_texture.texture.borrow().view,
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::Sampler(
+                        &textures.toon_shade_texture.sampler.borrow(),
+                    ),
+                },
             ],
         })
 }
@@ -180,12 +194,13 @@ struct StagingModelPrimitive {
     uvs: Vec<Vec2>,
     material_index: usize,
     material_settings: Rc<wgpu::Buffer>,
+    toon_shade_texture: Option<u32>,
 }
 
 impl StagingModelPrimitive {
     fn upload(
         self,
-        gltf: &Rc<gltf::Gltf>,
+        gltf: &Rc<gltf::Gltf<GltfExtensions>>,
         context: &Rc<ModelLoadContext>,
         buffers: &Rc<ModelBuffers>,
         base_url: &Rc<Option<url::Url>>,
@@ -199,6 +214,7 @@ impl StagingModelPrimitive {
                 context,
             ),
             emissive_texture: MaterialTexture::new(Rc::clone(&context.black_image), context),
+            toon_shade_texture: MaterialTexture::new(Rc::clone(&context.black_image), context),
         });
 
         let material_index = self.material_index;
@@ -241,6 +257,27 @@ impl StagingModelPrimitive {
                 }
             }
         });
+
+        if let Some(toon_shade_texture) = self.toon_shade_texture {
+            wasm_bindgen_futures::spawn_local({
+                let textures = Rc::clone(&textures);
+                let context = Rc::clone(&texture_load_context);
+                async move {
+                    if let Some(toon_shade_texture) =
+                        context.gltf.textures().nth(toon_shade_texture as usize)
+                    {
+                        upload_model_texture_from_gltf(
+                            &toon_shade_texture,
+                            &textures.toon_shade_texture,
+                            false,
+                            &context,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                }
+            });
+        }
 
         wasm_bindgen_futures::spawn_local({
             let textures = Rc::clone(&textures);
@@ -339,12 +376,32 @@ pub(crate) struct Model {
     pub(crate) num_indices: u32,
 }
 
+use vrm_gltf::GltfExtensions;
+
 pub(crate) async fn load_gltf_from_bytes(
     bytes: &[u8],
     base_url: Option<url::Url>,
     context: &Rc<ModelLoadContext>,
 ) -> anyhow::Result<Model> {
-    let gltf = gltf::Gltf::from_slice(bytes).unwrap();
+    let gltf = gltf::Gltf::<GltfExtensions>::from_slice(bytes).unwrap();
+
+    let json = gltf.document.as_json();
+
+    let extensions = &json.extensions;
+
+    let mut toon_shaded_materials = HashMap::new();
+
+    if let Some(ext) = extensions.as_ref() {
+        if let Some(vrm) = &ext.custom.vrm {
+            for material in &vrm.material_properties {
+                if material.shader == "VRM/MToon" {
+                    toon_shaded_materials.insert(material.name.clone(), material.clone());
+                } else {
+                    log::warn!("{:#?}", material);
+                }
+            }
+        }
+    }
 
     let mut buffers = ModelBuffers {
         map: Default::default(),
@@ -392,6 +449,44 @@ pub(crate) async fn load_gltf_from_bytes(
         for primitive in mesh.primitives() {
             let material = primitive.material();
 
+            let toon_shaded_properties = material
+                .name()
+                .and_then(|name| toon_shaded_materials.get(name));
+
+            let (mode, toon_shading_settings, toon_shade_texture, toon_base_color_factor) =
+                if let Some(props) = toon_shaded_properties {
+                    log::warn!("{:#?}", props.texture);
+
+                    let settings = shared_structs::ToonShadingSettings {
+                        shade_colour_factor: Vec4::from(props.vector.shade_color).truncate(),
+                        shift_factor: props.float.shade_shift,
+                        toony_factor: props.float.shade_toony,
+                    };
+
+                    log::warn!("{:#?}", settings);
+
+                    (
+                        shared_structs::mode::TOON,
+                        settings,
+                        Some(props.texture.shade_texture.clone()),
+                        Vec4::from(props.vector.color),
+                    )
+                } else if material.unlit() {
+                    (
+                        shared_structs::mode::UNLIT,
+                        Default::default(),
+                        None,
+                        Vec4::ONE,
+                    )
+                } else {
+                    (
+                        shared_structs::mode::PBR,
+                        Default::default(),
+                        None,
+                        Vec4::ONE,
+                    )
+                };
+
             // Note: it's possible to render double-sided objects with a backface-culling shader if we double the
             // triangles in the index buffer but with a backwards winding order. It's only worth doing this to keep
             // the number of shader permutations down.
@@ -421,11 +516,13 @@ pub(crate) async fn load_gltf_from_bytes(
                                     label: Some("material settings"),
                                     contents: bytemuck::bytes_of(
                                         &shared_structs::MaterialSettings {
-                                            base_color_factor: pbr.base_color_factor().into(),
+                                            base_color_factor: Vec4::from(pbr.base_color_factor())
+                                                * toon_base_color_factor,
                                             emissive_factor: material.emissive_factor().into(),
                                             metallic_factor: pbr.metallic_factor(),
                                             roughness_factor: pbr.roughness_factor(),
-                                            is_unlit: material.unlit() as u32,
+                                            mode,
+                                            toon_shading: toon_shading_settings,
                                         }
                                         .as_std140(),
                                     ),
@@ -433,6 +530,7 @@ pub(crate) async fn load_gltf_from_bytes(
                                 }),
                         ),
                         material_index: material.index().unwrap_or(0),
+                        toon_shade_texture,
                     })
                 }
             };
@@ -538,7 +636,7 @@ pub(crate) async fn load_gltf_from_bytes(
 
 async fn load_image_from_gltf(
     context: &TextureLoadContext,
-    texture: &gltf::Texture<'_>,
+    texture: &gltf::Texture<'_, GltfExtensions>,
     srgb: bool,
     binding: &MaterialTexture,
 ) -> anyhow::Result<Rc<Texture>> {
