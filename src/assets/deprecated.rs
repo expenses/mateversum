@@ -95,8 +95,8 @@ pub(super) fn load_standard_image_format(
     let temp_blit_textures: Vec<_> = (1..mip_level_count)
         .map(|level| {
             let mip_extent = wgpu::Extent3d {
-                width: image.width() >> level,
-                height: image.height() >> level,
+                width: (image.width() >> level).max(1),
+                height: (image.height() >> level).max(1),
                 depth_or_array_layers: 1,
             };
 

@@ -17,10 +17,15 @@ impl PipelineSet {
         opaque_fragment: wgpu::FragmentState,
         alpha_clipped_fragment: wgpu::FragmentState,
         multiview: Option<std::num::NonZeroU32>,
+        double_sided: bool,
     ) -> Self {
         let normal_primitive_state = wgpu::PrimitiveState {
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: if !double_sided {
+                Some(wgpu::Face::Back)
+            } else {
+                None
+            },
             ..Default::default()
         };
 
@@ -107,8 +112,7 @@ impl PipelineSet {
 
 pub(crate) struct Pipelines {
     pub(crate) pbr: PipelineSet,
-    pub(crate) unlit: PipelineSet,
-    pub(crate) line: wgpu::RenderPipeline,
+    pub(crate) pbr_double_sided: PipelineSet,
     pub(crate) stencil_write: wgpu::RenderPipeline,
     pub(crate) set_depth: wgpu::RenderPipeline,
     pub(crate) tonemap: wgpu::RenderPipeline,
@@ -197,48 +201,6 @@ impl Pipelines {
             bias: wgpu::DepthBiasState::default(),
             stencil: wgpu::StencilState::default(),
         };
-
-        let line_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("line pipeline layout"),
-            bind_group_layouts: &[uniform_bgl],
-            push_constant_ranges: &[],
-        });
-
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("line pipeline"),
-            layout: Some(&line_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: shader_cache.get("line_vertex", || {
-                    device.create_shader_module(&if multiview.is_none() {
-                        wgpu::include_spirv!("../compiled-shaders/single_view_line_vertex.spv")
-                    } else {
-                        wgpu::include_spirv!("../compiled-shaders/line_vertex.spv")
-                    })
-                }),
-                entry_point: &format!("{}line_vertex", prefix),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 6 * 4,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: shader_cache.get("flat_colour", || {
-                    device.create_shader_module(&wgpu::include_spirv!(
-                        "../compiled-shaders/flat_colour.spv"
-                    ))
-                }),
-                entry_point: "flat_colour",
-                targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(normal_depth_state.clone()),
-            multisample: Default::default(),
-            multiview,
-        });
 
         let tonemap_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -396,6 +358,32 @@ impl Pipelines {
                 push_constant_ranges: &[],
             });
 
+        let fragment_opaque = wgpu::FragmentState {
+            module: shader_cache.get("fragment", || {
+                device.create_shader_module(&if multiview.is_none() {
+                    wgpu::include_spirv!("../compiled-shaders/single_view_fragment.spv")
+                } else {
+                    wgpu::include_spirv!("../compiled-shaders/fragment.spv")
+                })
+            }),
+            entry_point: &format!("{}fragment", prefix),
+            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+        };
+
+        let fragment_alpha_clipped = wgpu::FragmentState {
+            module: shader_cache.get("fragment_alpha_clipped", || {
+                device.create_shader_module(&if multiview.is_none() {
+                    wgpu::include_spirv!(
+                        "../compiled-shaders/single_view_fragment_alpha_clipped.spv"
+                    )
+                } else {
+                    wgpu::include_spirv!("../compiled-shaders/fragment_alpha_clipped.spv")
+                })
+            }),
+            entry_point: &format!("{}fragment_alpha_clipped", prefix),
+            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+        };
+
         Self {
             pbr: PipelineSet::new(
                 device,
@@ -403,62 +391,25 @@ impl Pipelines {
                 &mirrored_pipeline_layout,
                 vertex_state.clone(),
                 mirrored_vertex.clone(),
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment", || {
-                        device.create_shader_module(&if multiview.is_none() {
-                            wgpu::include_spirv!("../compiled-shaders/single_view_fragment.spv")
-                        } else {
-                            wgpu::include_spirv!("../compiled-shaders/fragment.spv")
-                        })
-                    }),
-                    entry_point: &format!("{}fragment", prefix),
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment_alpha_clipped", || {
-                        device.create_shader_module(&if multiview.is_none() {
-                            wgpu::include_spirv!(
-                                "../compiled-shaders/single_view_fragment_alpha_clipped.spv"
-                            )
-                        } else {
-                            wgpu::include_spirv!("../compiled-shaders/fragment_alpha_clipped.spv")
-                        })
-                    }),
-                    entry_point: &format!("{}fragment_alpha_clipped", prefix),
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
+                fragment_opaque.clone(),
+                fragment_alpha_clipped.clone(),
                 multiview,
+                false,
             ),
-            line: line_pipeline,
-            stencil_write: stencil_write_pipeline,
-            set_depth: set_depth_pipeline,
-            tonemap: tonemap_pipeline,
-            unlit: PipelineSet::new(
+            pbr_double_sided: PipelineSet::new(
                 device,
                 &model_pipeline_layout,
                 &mirrored_pipeline_layout,
                 vertex_state.clone(),
-                mirrored_vertex,
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment_unlit", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_unlit.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_unlit",
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
-                wgpu::FragmentState {
-                    module: shader_cache.get("fragment_unlit_alpha_clipped", || {
-                        device.create_shader_module(&wgpu::include_spirv!(
-                            "../compiled-shaders/fragment_unlit_alpha_clipped.spv"
-                        ))
-                    }),
-                    entry_point: "fragment_unlit_alpha_clipped",
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
-                },
+                mirrored_vertex.clone(),
+                fragment_opaque.clone(),
+                fragment_alpha_clipped.clone(),
                 multiview,
+                true,
             ),
+            stencil_write: stencil_write_pipeline,
+            set_depth: set_depth_pipeline,
+            tonemap: tonemap_pipeline,
             ui: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("ui pipeline"),
                 layout: Some(&ui_pipeline_layout),

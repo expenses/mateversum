@@ -602,31 +602,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         }],
     });
 
-    let mut line_verts = [
-        LineVertex {
-            position: -Vec3::ONE,
-            colour: Vec3::X,
-        },
-        LineVertex {
-            position: Vec3::ONE,
-            colour: Vec3::Y,
-        },
-        LineVertex {
-            position: Vec3::new(-1.0, 1.0, -1.0),
-            colour: Vec3::Z,
-        },
-        LineVertex {
-            position: -Vec3::new(-1.0, 1.0, -1.0),
-            colour: Vec3::ONE - Vec3::Z,
-        },
-    ];
-
-    let line_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("line buffer"),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
-        contents: bytemuck::cast_slice(&line_verts),
-    });
-
     let mirror_instance = world
         .mirror
         .as_ref()
@@ -658,6 +633,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let bind_group_cache = ResourceCache::default();
 
     let mut offset = Vec3::ZERO;
+    let mut orientation = glam::Quat::IDENTITY;
 
     let egui_ctx = egui::Context::default();
     let mut egui_renderer =
@@ -694,21 +670,16 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let egui_primitives = egui_ctx.tessellate(egui_output.shapes);
         egui_renderer.update_buffers(&device, &queue, &egui_primitives, &screen_descriptor);
 
-        let movement = movement.borrow();
-
-        if let Some(movement) = movement.as_ref() {
+        if let Some(movement) = movement.borrow().as_ref() {
             offset += *movement * 2.0 / 60.0;
         }
 
-        let mut js_offset = web_sys::DomPointInit::new();
-
-        js_offset
-            .x(offset.x as f64)
-            .y(offset.y as f64)
-            .z(offset.z as f64);
-
         let reference_space = reference_space.get_offset_reference_space(
-            &web_sys::XrRigidTransform::new_with_position(&js_offset).unwrap(),
+            &web_sys::XrRigidTransform::new_with_position_and_orientation(
+                &vec_to_dom_point(-orientation * offset),
+                &quat_to_dom_point(-orientation),
+            )
+            .unwrap(),
         );
 
         let models = models.borrow();
@@ -736,7 +707,23 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     let transform = grip_pose.transform();
                     let instance = Instance::from_transform(transform, 1.0);
                     player_state.hands[i as usize] = instance;
-                    line_verts[i as usize * 2].position = instance.position;
+                }
+            }
+
+            if let Some(gamepad) = input_source.gamepad() {
+                let axes = gamepad.axes();
+
+                if let Some((x, y)) = axes
+                    .get(2)
+                    .as_f64()
+                    .and_then(|x| axes.get(3).as_f64().map(|y| ((x, y))))
+                {
+                    if i == 0 {
+                        *movement.borrow_mut() =
+                            Some(player_state.head.rotation * Vec3::new(-x as f32, 0.0, -y as f32));
+                    } else if i == 1 {
+                        orientation *= glam::Quat::from_rotation_y(x as f32 * 0.1 * (2.0 / 3.0));
+                    }
                 }
             }
         }
@@ -777,23 +764,21 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             let parse_matrix = |vec| Mat4::from_cols_array(&<[f32; 16]>::try_from(vec).unwrap());
 
             let left_proj = parse_matrix(views[0].projection_matrix());
-            let left_inv = parse_matrix(views[0].transform().inverse().matrix());
+            let left_inv = parse_matrix(views[0].transform().matrix()).inverse();
 
             let left_projection_view = (left_proj * left_inv).into();
-            let left_eye_position = {
-                let p = views[0].transform().position();
-                glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-            };
+            let left_instance = Instance::from_transform(views[0].transform(), 0.0);
 
-            let (right_projection_view, right_proj, right_eye_position) =
+            let (right_projection_view, right_proj, right_instance) =
                 if let Some(right_view) = views.get(1) {
-                    let right_inv = parse_matrix(right_view.transform().inverse().matrix());
+                    let right_inv = parse_matrix(right_view.transform().matrix()).inverse();
                     let right_proj = parse_matrix(right_view.projection_matrix());
 
-                    ((right_proj * right_inv).into(), right_proj, {
-                        let p = right_view.transform().position();
-                        glam::DVec3::new(p.x(), p.y(), p.z()).as_vec3()
-                    })
+                    (
+                        (right_proj * right_inv).into(),
+                        right_proj,
+                        Instance::from_transform(right_view.transform(), 0.0),
+                    )
                 } else {
                     Default::default()
                 };
@@ -805,8 +790,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &shared_structs::Uniforms {
                         left_projection_view,
                         right_projection_view,
-                        left_eye_position,
-                        right_eye_position,
+                        left_eye_position: left_instance.position,
+                        right_eye_position: right_instance.position,
                     }
                     .as_std140(),
                 ),
@@ -819,15 +804,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &shared_structs::SkyboxUniforms {
                         left_projection_inverse: left_proj.inverse().into(),
                         right_projection_inverse: right_proj.inverse().into(),
-                        left_view_inverse: Instance::from_transform(views[0].transform(), 1.0)
-                            .rotation
-                            .into(),
-                        right_view_inverse: Instance::from_transform(
-                            views.get(1).unwrap_or(&views[0]).transform(),
-                            1.0,
-                        )
-                        .rotation
-                        .into(),
+                        left_view_inverse: left_instance.rotation.into(),
+                        right_view_inverse: right_instance.rotation.into(),
                     }
                     .as_std140(),
                 ),
@@ -846,8 +824,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     .call1(&wasm_bindgen::JsValue::undefined(), &uint8)
                     .unwrap();
             }
-
-            queue.write_buffer(&line_buffer, 0, bytemuck::cast_slice(&line_verts));
         }
 
         let framebuffer = js_sys::Reflect::get(&base_layer, &"framebuffer".into())
@@ -993,7 +969,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         // We borrow all the bind groups here because they need to be borrowed for the entire duration of the render pass.
 
         let model_bind_groups = ModelBindGroups {
-            pbr_opaque: models
+            opaque: models
                 .values()
                 .map(|model| {
                     model
@@ -1004,7 +980,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         .collect::<Vec<_>>()
                 })
                 .collect(),
-            pbr_alpha_clipped: models
+            alpha_clipped: models
                 .values()
                 .map(|model| {
                     model
@@ -1015,24 +991,24 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         .collect::<Vec<_>>()
                 })
                 .collect(),
-            unlit_opaque: models
+            opaque_double_sided: models
                 .values()
                 .map(|model| {
                     model
                         .model
                         .iter()
-                        .flat_map(|model| &model.unlit_opaque_primitives)
+                        .flat_map(|model| &model.opaque_double_sided_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
                 .collect(),
-            unlit_alpha_clipped: models
+            alpha_clipped_double_sided: models
                 .values()
                 .map(|model| {
                     model
                         .model
                         .iter()
-                        .flat_map(|model| &model.unlit_alpha_clipped_primitives)
+                        .flat_map(|model| &model.alpha_clipped_double_sided_primitives)
                         .map(|primitive| primitive.bind_group.borrow())
                         .collect::<Vec<_>>()
                 })
@@ -1156,19 +1132,19 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     &model_instances,
                     |model| &model.opaque_primitives,
-                    &model_bind_groups.pbr_opaque,
+                    &model_bind_groups.opaque,
                     &heads_mirrored,
                     &hands,
                 );
 
-                render_pass.set_pipeline(&pipelines.unlit.opaque_mirrored);
+                render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque_mirrored);
 
                 render_all(
                     &mut render_pass,
                     &models,
                     &model_instances,
-                    |model| &model.unlit_opaque_primitives,
-                    &model_bind_groups.unlit_opaque,
+                    |model| &model.opaque_double_sided_primitives,
+                    &model_bind_groups.opaque_double_sided,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1180,19 +1156,19 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     &models,
                     &model_instances,
                     |model| &model.alpha_clipped_primitives,
-                    &model_bind_groups.pbr_alpha_clipped,
+                    &model_bind_groups.alpha_clipped,
                     &heads_mirrored,
                     &hands,
                 );
 
-                render_pass.set_pipeline(&pipelines.unlit.alpha_clipped_mirrored);
+                render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped_mirrored);
 
                 render_all(
                     &mut render_pass,
                     &models,
                     &model_instances,
-                    |model| &model.unlit_alpha_clipped_primitives,
-                    &model_bind_groups.unlit_alpha_clipped,
+                    |model| &model.alpha_clipped_double_sided_primitives,
+                    &model_bind_groups.alpha_clipped_double_sided,
                     &heads_mirrored,
                     &hands,
                 );
@@ -1224,19 +1200,19 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 &model_instances,
                 |model| &model.opaque_primitives,
-                &model_bind_groups.pbr_opaque,
+                &model_bind_groups.opaque,
                 &heads,
                 &hands,
             );
 
-            render_pass.set_pipeline(&pipelines.unlit.opaque);
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
 
             render_all(
                 &mut render_pass,
                 &models,
                 &model_instances,
-                |model| &model.unlit_opaque_primitives,
-                &model_bind_groups.unlit_opaque,
+                |model| &model.opaque_double_sided_primitives,
+                &model_bind_groups.opaque_double_sided,
                 &heads,
                 &hands,
             );
@@ -1248,28 +1224,22 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &models,
                 &model_instances,
                 |model| &model.alpha_clipped_primitives,
-                &model_bind_groups.pbr_alpha_clipped,
+                &model_bind_groups.alpha_clipped,
                 &heads,
                 &hands,
             );
 
-            render_pass.set_pipeline(&pipelines.unlit.alpha_clipped);
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
 
             render_all(
                 &mut render_pass,
                 &models,
                 &model_instances,
-                |model| &model.unlit_alpha_clipped_primitives,
-                &model_bind_groups.unlit_alpha_clipped,
+                |model| &model.alpha_clipped_double_sided_primitives,
+                &model_bind_groups.alpha_clipped_double_sided,
                 &heads,
                 &hands,
             );
-        }
-
-        {
-            render_pass.set_pipeline(&pipelines.line);
-            render_pass.set_vertex_buffer(0, line_buffer.slice(..));
-            render_pass.draw(0..4, 0..1);
         }
 
         {
@@ -1544,31 +1514,28 @@ impl Instance {
     }
 
     pub fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
-        let position = transform.position();
         let rotation = transform.orientation();
 
-        let position = glam::DVec3::new(position.x(), position.y(), position.z());
         let rotation =
             glam::DQuat::from_xyzw(rotation.x(), rotation.y(), rotation.z(), rotation.w());
         Self {
-            position: position.as_vec3(),
+            position: transform_to_position_vec3(&transform),
             rotation: rotation.as_f32(),
             scale,
         }
     }
 }
 
+fn transform_to_position_vec3(transform: &web_sys::XrRigidTransform) -> Vec3 {
+    let position = transform.position();
+    let position = glam::DVec3::new(position.x(), position.y(), position.z());
+    position.as_vec3()
+}
+
 impl Default for Instance {
     fn default() -> Self {
         Self::new(Vec3::ZERO, 1.0, glam::Quat::IDENTITY)
     }
-}
-
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-pub struct LineVertex {
-    pub position: Vec3,
-    pub colour: Vec3,
 }
 
 fn cast_slice<F, T>(slice: &[F]) -> &[T] {
@@ -1605,10 +1572,10 @@ fn render_primitives<'a>(
 }
 
 struct ModelBindGroups<'a> {
-    pbr_opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
-    pbr_alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
-    unlit_opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
-    unlit_alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    opaque_double_sided: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
+    alpha_clipped_double_sided: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
 }
 
 struct HeadOrHandsRenderingData<'a> {
@@ -1850,7 +1817,6 @@ impl InstanceBuffer {
 struct IndexBuffer {
     allocator: range_alloc::RangeAllocator<u32>,
     buffer: wgpu::Buffer,
-    cpu_buffer: Vec<u8>,
 }
 
 impl IndexBuffer {
@@ -1864,10 +1830,9 @@ impl IndexBuffer {
             buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("index buffer"),
                 size: Self::size_in_bytes(capacity),
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
-            cpu_buffer: vec![0; Self::size_in_bytes(capacity) as usize],
         }
     }
 
@@ -1901,10 +1866,6 @@ impl IndexBuffer {
             bytemuck::cast_slice(indices),
         );
 
-        self.cpu_buffer
-            [Self::size_in_bytes(range.start) as usize..Self::size_in_bytes(range.end) as usize]
-            .copy_from_slice(bytemuck::cast_slice(indices));
-
         range
     }
 
@@ -1913,7 +1874,7 @@ impl IndexBuffer {
         required_capacity: u32,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _command_encoder: &mut wgpu::CommandEncoder,
+        command_encoder: &mut wgpu::CommandEncoder,
     ) {
         let old_capacity = self.allocator.initial_range().end;
 
@@ -1930,21 +1891,34 @@ impl IndexBuffer {
         let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("index buffer"),
             size: Self::size_in_bytes(new_capacity),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
         // Can't do this in WebGL T_T
         // Caused uvs to look messed up.
-        // command_encoder.copy_buffer_to_buffer(&self.buffer, 0, &new_buffer, 0, Self::size_in_bytes(old_capacity));
-
-        queue.write_buffer(&new_buffer, 0, &self.cpu_buffer);
-
-        let mut new_cpu_buffer = vec![0; Self::size_in_bytes(new_capacity) as usize];
-
-        new_cpu_buffer[0..self.cpu_buffer.len()].copy_from_slice(&self.cpu_buffer);
+        command_encoder.copy_buffer_to_buffer(&self.buffer, 0, &new_buffer, 0, Self::size_in_bytes(old_capacity));
 
         self.buffer = new_buffer;
-        self.cpu_buffer = new_cpu_buffer;
     }
+}
+
+fn vec_to_dom_point(vec: Vec3) -> web_sys::DomPointInit {
+    let mut dom_point = web_sys::DomPointInit::new();
+
+    dom_point.x(vec.x as f64).y(vec.y as f64).z(vec.z as f64);
+
+    dom_point
+}
+
+fn quat_to_dom_point(quat: glam::Quat) -> web_sys::DomPointInit {
+    let mut dom_point = web_sys::DomPointInit::new();
+
+    dom_point
+        .x(quat.x as f64)
+        .y(quat.y as f64)
+        .z(quat.z as f64)
+        .w(quat.w as f64);
+
+    dom_point
 }

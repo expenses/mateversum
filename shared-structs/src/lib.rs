@@ -90,6 +90,7 @@ pub struct MaterialSettings {
     pub emissive_factor: Vec3,
     pub metallic_factor: f32,
     pub roughness_factor: f32,
+    pub is_unlit: u32,
 }
 
 // https://docs.gl/sl4/reflect

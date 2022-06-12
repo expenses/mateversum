@@ -330,8 +330,8 @@ impl StagingModelPrimitive {
 pub(crate) struct Model {
     pub(crate) opaque_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
-    pub(crate) unlit_opaque_primitives: Vec<ModelPrimitive>,
-    pub(crate) unlit_alpha_clipped_primitives: Vec<ModelPrimitive>,
+    pub(crate) opaque_double_sided_primitives: Vec<ModelPrimitive>,
+    pub(crate) alpha_clipped_double_sided_primitives: Vec<ModelPrimitive>,
     pub(crate) positions: wgpu::Buffer,
     pub(crate) normals: wgpu::Buffer,
     pub(crate) uvs: wgpu::Buffer,
@@ -380,8 +380,8 @@ pub(crate) async fn load_gltf_from_bytes(
 
     let mut opaque_primitives = std::collections::HashMap::new();
     let mut alpha_clipped_primitives = std::collections::HashMap::new();
-    let mut unlit_opaque_primitives = std::collections::HashMap::new();
-    let mut unlit_alpha_clipped_primitives = std::collections::HashMap::new();
+    let mut opaque_double_sided_primitives = std::collections::HashMap::new();
+    let mut alpha_clipped_double_sided_primitives = std::collections::HashMap::new();
 
     for (node, mesh) in gltf
         .nodes()
@@ -392,11 +392,15 @@ pub(crate) async fn load_gltf_from_bytes(
         for primitive in mesh.primitives() {
             let material = primitive.material();
 
-            let primitive_map = match (material.alpha_mode(), material.unlit()) {
+            // Note: it's possible to render double-sided objects with a backface-culling shader if we double the
+            // triangles in the index buffer but with a backwards winding order. It's only worth doing this to keep
+            // the number of shader permutations down.
+
+            let primitive_map = match (material.alpha_mode(), material.double_sided()) {
                 (gltf::material::AlphaMode::Opaque, false) => &mut opaque_primitives,
                 (_, false) => &mut alpha_clipped_primitives,
-                (gltf::material::AlphaMode::Opaque, true) => &mut unlit_opaque_primitives,
-                (_, true) => &mut unlit_alpha_clipped_primitives,
+                (gltf::material::AlphaMode::Opaque, true) => &mut opaque_double_sided_primitives,
+                (_, true) => &mut alpha_clipped_double_sided_primitives,
             };
 
             // We can't use `or_insert_with` here as that uses a closure and closures aren't async.
@@ -421,6 +425,7 @@ pub(crate) async fn load_gltf_from_bytes(
                                             emissive_factor: material.emissive_factor().into(),
                                             metallic_factor: pbr.metallic_factor(),
                                             roughness_factor: pbr.roughness_factor(),
+                                            is_unlit: material.unlit() as u32,
                                         }
                                         .as_std140(),
                                     ),
@@ -480,19 +485,20 @@ pub(crate) async fn load_gltf_from_bytes(
                 primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
             })
             .collect(),
+        opaque_double_sided_primitives: opaque_double_sided_primitives
+            .into_values()
+            .map(|primitive| {
+                primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
+            })
+            .collect(),
         alpha_clipped_primitives: alpha_clipped_primitives
             .into_values()
             .map(|primitive| {
                 primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
             })
             .collect(),
-        unlit_opaque_primitives: unlit_opaque_primitives
-            .into_values()
-            .map(|primitive| {
-                primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
-            })
-            .collect(),
-        unlit_alpha_clipped_primitives: unlit_alpha_clipped_primitives
+
+        alpha_clipped_double_sided_primitives: alpha_clipped_double_sided_primitives
             .into_values()
             .map(|primitive| {
                 primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)

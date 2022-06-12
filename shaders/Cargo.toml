@@ -10,3 +10,5 @@ crate-type = ["dylib", "lib"]
 spirv-std = { git = "https://github.com/EmbarkStudios/rust-gpu", features = ["glam"] }
 glam-pbr = { git = "https://github.com/expenses/glam-pbr" }
 shared-structs = { path = "../shared-structs" }
+
+[workspace]
