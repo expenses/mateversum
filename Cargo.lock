@@ -83,7 +83,7 @@ checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 [[package]]
 name = "basis-universal"
 version = "0.1.1"
-source = "git+https://github.com/expenses/basis-universal-rs#9dfe48eedda08a24f70c86dfede341654e394594"
+source = "git+https://github.com/expenses/basis-universal-rs?branch=wasm-support#8e574b16da844fd4b15af39c188c3b86d81c35d3"
 dependencies = [
  "basis-universal-sys",
  "basis-universal-wasm",
@@ -95,7 +95,7 @@ dependencies = [
 [[package]]
 name = "basis-universal-sys"
 version = "0.1.1"
-source = "git+https://github.com/expenses/basis-universal-rs#9dfe48eedda08a24f70c86dfede341654e394594"
+source = "git+https://github.com/expenses/basis-universal-rs?branch=wasm-support#8e574b16da844fd4b15af39c188c3b86d81c35d3"
 dependencies = [
  "cc",
 ]
@@ -801,6 +801,7 @@ dependencies = [
  "js-sys",
  "ktx2",
  "log",
+ "range-alloc 0.1.2 (git+https://github.com/expenses/gfx?branch=range-allocator)",
  "serde",
  "serde_json",
  "shared-structs",
@@ -1060,6 +1061,11 @@ name = "range-alloc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e935c45e09cc6dcf00d2f0b2d630a58f4095320223d47fc68918722f0538b6"
+
+[[package]]
+name = "range-alloc"
+version = "0.1.2"
+source = "git+https://github.com/expenses/gfx?branch=range-allocator#6afbeb6d9733e295404f4fe0ac936591e277a26e"
 
 [[package]]
 name = "raw-window-handle"
@@ -1516,7 +1522,7 @@ dependencies = [
  "objc",
  "parking_lot",
  "profiling",
- "range-alloc",
+ "range-alloc 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "raw-window-handle",
  "renderdoc-sys",
  "thiserror",
