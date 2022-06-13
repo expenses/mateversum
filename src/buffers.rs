@@ -94,11 +94,13 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct IndexBuffer {
     allocator: range_alloc::RangeAllocator<u32>,
-    buffer: wgpu::Buffer,
+    pub(crate) buffer: wgpu::Buffer,
 }
 
+#[allow(dead_code)]
 impl IndexBuffer {
     fn size_in_bytes(size: u32) -> u64 {
         size as u64 * size_of::<u32>() as u64
@@ -150,6 +152,13 @@ impl IndexBuffer {
         device: &wgpu::Device,
         command_encoder: &mut wgpu::CommandEncoder,
     ) {
+        let copy_range = self
+            .allocator
+            .allocated_ranges()
+            .last()
+            .map(|range| range.end)
+            .unwrap_or(0);
+
         let old_capacity = self.allocator.initial_range().end;
 
         let new_capacity = (old_capacity + required_capacity).max(old_capacity * 2);
@@ -176,7 +185,7 @@ impl IndexBuffer {
             0,
             &new_buffer,
             0,
-            Self::size_in_bytes(old_capacity),
+            Self::size_in_bytes(copy_range),
         );
 
         self.buffer = new_buffer;
@@ -289,11 +298,11 @@ impl VertexBuffers {
         self.allocator.grow_to(new_capacity);
 
         let new_position_buffer =
-            Self::create_buffer(&device, "position buffer", new_capacity, size_of::<Vec3>());
+            Self::create_buffer(device, "position buffer", new_capacity, size_of::<Vec3>());
         let new_normal_buffer =
-            Self::create_buffer(&device, "normal buffer", new_capacity, size_of::<Vec3>());
+            Self::create_buffer(device, "normal buffer", new_capacity, size_of::<Vec3>());
         let new_uv_buffer =
-            Self::create_buffer(&device, "uv buffer", new_capacity, size_of::<Vec2>());
+            Self::create_buffer(device, "uv buffer", new_capacity, size_of::<Vec2>());
 
         command_encoder.copy_buffer_to_buffer(
             &self.position,

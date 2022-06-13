@@ -333,7 +333,7 @@ pub(crate) struct Model {
     pub(crate) alpha_clipped_primitives: Vec<ModelPrimitive>,
     pub(crate) opaque_double_sided_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_double_sided_primitives: Vec<ModelPrimitive>,
-    pub(crate) vertex_buffer_range: Range<u32>,
+    pub(crate) _vertex_buffer_range: Range<u32>,
     pub(crate) indices: wgpu::Buffer,
     // todo: use indices ranges for opaque and alpha clipped models.
     pub(crate) num_indices: u32,
@@ -535,7 +535,7 @@ pub(crate) async fn load_gltf_from_bytes(
         alpha_clipped_primitives,
         alpha_clipped_double_sided_primitives,
         num_indices: indices.len() as u32,
-        vertex_buffer_range,
+        _vertex_buffer_range: vertex_buffer_range,
         indices: context
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

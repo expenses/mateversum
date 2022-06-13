@@ -3,7 +3,6 @@ use futures::FutureExt;
 use glam::{Mat4, Vec3};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem::size_of;
 use std::ops::Range;
 use std::rc::Rc;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -713,7 +712,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 if let Some((x, y)) = axes
                     .get(2)
                     .as_f64()
-                    .and_then(|x| axes.get(3).as_f64().map(|y| ((x, y))))
+                    .and_then(|x| axes.get(3).as_f64().map(|y| (x, y)))
                 {
                     if i == 0 {
                         *movement.borrow_mut() =
