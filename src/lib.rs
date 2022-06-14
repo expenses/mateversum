@@ -353,6 +353,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     );
 
     let vertex_buffers = Rc::new(RefCell::new(VertexBuffers::new(1024, &device)));
+    let index_buffer = Rc::new(RefCell::new(buffers::IndexBuffer::new(1024, &device)));
 
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
@@ -394,6 +395,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .features()
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
         vertex_buffers: Rc::clone(&vertex_buffers),
+        index_buffer: Rc::clone(&index_buffer),
     });
 
     let models = Rc::new(RefCell::new(slotmap::SlotMap::new()));
@@ -1076,6 +1078,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         );
 
         let vertex_buffers = vertex_buffers.borrow();
+        let index_buffer = index_buffer.borrow();
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
@@ -1102,6 +1105,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         render_pass.set_bind_group(0, &uniform_bind_group, &[]);
 
+        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
         render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
         render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
@@ -1114,9 +1118,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             render_pass.set_pipeline(&pipelines.stencil_write);
 
-            bind_model_buffers(&mut render_pass, mirror_model);
             render_pass.draw_indexed(
-                0..mirror_model.num_indices,
+                mirror_model.index_buffer_range.clone(),
                 0,
                 mirror_model_instances.clone(),
             );
@@ -1181,9 +1184,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             {
                 render_pass.set_pipeline(&pipelines.set_depth);
-
-                bind_model_buffers(&mut render_pass, mirror_model);
-                render_pass.draw_indexed(0..mirror_model.num_indices, 0, mirror_model_instances);
+                render_pass.draw_indexed(
+                    mirror_model.index_buffer_range.clone(),
+                    0,
+                    mirror_model_instances,
+                );
             }
         }
 
@@ -1248,11 +1253,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             let ui_plane_model = ui_plane_model.model.as_ref().unwrap();
 
-            bind_model_buffers(&mut render_pass, ui_plane_model);
-
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
-
-            render_pass.draw_indexed(0..ui_plane_model.num_indices, 0, ui_plane_instance_range);
+            render_pass.draw_indexed(
+                ui_plane_model.index_buffer_range.clone(),
+                0,
+                ui_plane_instance_range,
+            );
         }
 
         drop(render_pass);
@@ -1544,22 +1550,6 @@ struct PlayerState {
     hands: [Instance; 2],
 }
 
-fn bind_model_buffers<'a>(render_pass: &mut wgpu::RenderPass<'a>, model: &'a assets::Model) {
-    render_pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
-}
-
-fn render_primitives<'a>(
-    render_pass: &mut wgpu::RenderPass<'a>,
-    primitives: &'a [ModelPrimitive],
-    bind_groups: &'a [std::cell::Ref<wgpu::BindGroup>],
-    instance_range: std::ops::Range<u32>,
-) {
-    for (primitive_index, primitive) in primitives.iter().enumerate() {
-        render_pass.set_bind_group(1, &bind_groups[primitive_index], &[]);
-        render_pass.draw_indexed(primitive.indices_range.clone(), 0, instance_range.clone());
-    }
-}
-
 struct ModelBindGroups<'a> {
     opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
     alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
@@ -1586,34 +1576,34 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
         models.values().zip(model_instances).enumerate()
     {
         if let Some(model) = &instanced_model.model {
-            bind_model_buffers(render_pass, model);
-
-            render_primitives(
-                render_pass,
-                primitives_getter(model),
-                &bind_groups[model_index],
-                instance_range.clone(),
-            );
+            for (primitive_index, primitive) in primitives_getter(model).iter().enumerate() {
+                render_pass.set_bind_group(1, &bind_groups[model_index][primitive_index], &[]);
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    instance_range.clone(),
+                );
+            }
         }
     }
 
-    bind_model_buffers(render_pass, heads.model);
+    for (primitive_index, primitive) in primitives_getter(heads.model).iter().enumerate() {
+        render_pass.set_bind_group(1, &heads.bind_groups[primitive_index], &[]);
+        render_pass.draw_indexed(
+            primitive.index_buffer_range.clone(),
+            0,
+            heads.instance_range.clone(),
+        );
+    }
 
-    render_primitives(
-        render_pass,
-        primitives_getter(heads.model),
-        heads.bind_groups,
-        heads.instance_range.clone(),
-    );
-
-    bind_model_buffers(render_pass, hands.model);
-
-    render_primitives(
-        render_pass,
-        primitives_getter(hands.model),
-        hands.bind_groups,
-        hands.instance_range.clone(),
-    );
+    for (primitive_index, primitive) in primitives_getter(hands.model).iter().enumerate() {
+        render_pass.set_bind_group(1, &hands.bind_groups[primitive_index], &[]);
+        render_pass.draw_indexed(
+            primitive.index_buffer_range.clone(),
+            0,
+            hands.instance_range.clone(),
+        );
+    }
 }
 
 struct InstancedModel {

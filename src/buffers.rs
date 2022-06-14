@@ -94,13 +94,11 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) struct IndexBuffer {
     allocator: range_alloc::RangeAllocator<u32>,
     pub(crate) buffer: wgpu::Buffer,
 }
 
-#[allow(dead_code)]
 impl IndexBuffer {
     fn size_in_bytes(size: u32) -> u64 {
         size as u64 * size_of::<u32>() as u64
@@ -120,7 +118,7 @@ impl IndexBuffer {
         }
     }
 
-    fn insert(
+    pub(crate) fn insert(
         &mut self,
         indices: &[u32],
         device: &wgpu::Device,

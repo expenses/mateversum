@@ -13,7 +13,7 @@ mod deprecated;
 
 use deprecated::*;
 
-use crate::buffers::VertexBuffers;
+use crate::buffers::{IndexBuffer, VertexBuffers};
 use crate::caching::{PipelineData, ResourceCache};
 
 pub(crate) struct ModelLoadContext {
@@ -34,6 +34,7 @@ pub(crate) struct ModelLoadContext {
     pub(crate) request_client: RequestClient,
     pub(crate) bc6h_supported: bool,
     pub(crate) vertex_buffers: Rc<RefCell<VertexBuffers>>,
+    pub(crate) index_buffer: Rc<RefCell<IndexBuffer>>,
 }
 
 struct ModelBuffers {
@@ -161,7 +162,7 @@ fn create_model_bind_group(
 
 pub(crate) struct ModelPrimitive {
     pub(crate) bind_group: Rc<RefCell<wgpu::BindGroup>>,
-    pub(crate) indices_range: std::ops::Range<u32>,
+    pub(crate) index_buffer_range: std::ops::Range<u32>,
     // We hold handles onto the used textures here, so that when the model is dropped, the `Rc::strong_count`
     // of the textures goes down. Then we are able to unload the textures from GPU memory by `HashMap::retain`ing the fetched images..
     _textures: Rc<MaterialTextures>,
@@ -322,7 +323,7 @@ impl StagingModelPrimitive {
 
         ModelPrimitive {
             bind_group,
-            indices_range: indices_start..indices_end,
+            index_buffer_range: indices_start..indices_end,
             _textures: textures,
         }
     }
@@ -334,9 +335,8 @@ pub(crate) struct Model {
     pub(crate) opaque_double_sided_primitives: Vec<ModelPrimitive>,
     pub(crate) alpha_clipped_double_sided_primitives: Vec<ModelPrimitive>,
     pub(crate) _vertex_buffer_range: Range<u32>,
-    pub(crate) indices: wgpu::Buffer,
     // todo: use indices ranges for opaque and alpha clipped models.
-    pub(crate) num_indices: u32,
+    pub(crate) index_buffer_range: Range<u32>,
 }
 
 pub(crate) async fn load_gltf_from_bytes(
@@ -478,26 +478,26 @@ pub(crate) async fn load_gltf_from_bytes(
     let base_url = Rc::new(base_url);
     let mut staging_buffers = StagingBuffers::default();
 
-    let opaque_primitives = opaque_primitives
+    let mut opaque_primitives: Vec<_> = opaque_primitives
         .into_values()
         .map(|primitive| {
             primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
         })
         .collect();
-    let opaque_double_sided_primitives = opaque_double_sided_primitives
+    let mut opaque_double_sided_primitives = opaque_double_sided_primitives
         .into_values()
         .map(|primitive| {
             primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
         })
         .collect();
-    let alpha_clipped_primitives = alpha_clipped_primitives
+    let mut alpha_clipped_primitives = alpha_clipped_primitives
         .into_values()
         .map(|primitive| {
             primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
         })
         .collect();
 
-    let alpha_clipped_double_sided_primitives = alpha_clipped_double_sided_primitives
+    let mut alpha_clipped_double_sided_primitives = alpha_clipped_double_sided_primitives
         .into_values()
         .map(|primitive| {
             primitive.upload(&gltf, context, &buffers, &base_url, &mut staging_buffers)
@@ -510,6 +510,7 @@ pub(crate) async fn load_gltf_from_bytes(
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("command encoder"),
             });
+
     let vertex_buffer_range = context.vertex_buffers.borrow_mut().insert(
         &staging_buffers.positions,
         &staging_buffers.normals,
@@ -519,30 +520,41 @@ pub(crate) async fn load_gltf_from_bytes(
         &mut command_encoder,
     );
 
-    context
-        .queue
-        .submit(std::iter::once(command_encoder.finish()));
-
     let indices: Vec<u32> = staging_buffers
         .indices
         .iter()
         .map(|index| vertex_buffer_range.start + index)
         .collect();
 
+    let index_buffer_range = context.index_buffer.borrow_mut().insert(
+        &indices,
+        &context.device,
+        &context.queue,
+        &mut command_encoder,
+    );
+
+    context
+        .queue
+        .submit(std::iter::once(command_encoder.finish()));
+
+    // Todo: This is a bit messy.
+    for primitive in opaque_primitives
+        .iter_mut()
+        .chain(&mut opaque_double_sided_primitives)
+        .chain(&mut alpha_clipped_primitives)
+        .chain(&mut alpha_clipped_double_sided_primitives)
+    {
+        primitive.index_buffer_range.start += index_buffer_range.start;
+        primitive.index_buffer_range.end += index_buffer_range.start;
+    }
+
     Ok(Model {
         opaque_primitives,
         opaque_double_sided_primitives,
         alpha_clipped_primitives,
         alpha_clipped_double_sided_primitives,
-        num_indices: indices.len() as u32,
         _vertex_buffer_range: vertex_buffer_range,
-        indices: context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("indices"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+        index_buffer_range,
     })
 }
 
