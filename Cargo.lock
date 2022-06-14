@@ -1461,7 +1461,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#77218e3bf2883765da02b33f35a63e61bdbbc4ab"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#22f8ee613415fc4f730677de848098da34ef3f35"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -1481,7 +1481,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#77218e3bf2883765da02b33f35a63e61bdbbc4ab"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#22f8ee613415fc4f730677de848098da34ef3f35"
 dependencies = [
  "arrayvec",
  "bit-vec",
@@ -1505,7 +1505,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#77218e3bf2883765da02b33f35a63e61bdbbc4ab"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#22f8ee613415fc4f730677de848098da34ef3f35"
 dependencies = [
  "android-properties",
  "arrayvec",
@@ -1543,7 +1543,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#77218e3bf2883765da02b33f35a63e61bdbbc4ab"
+source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#22f8ee613415fc4f730677de848098da34ef3f35"
 dependencies = [
  "bitflags",
 ]
