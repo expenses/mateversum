@@ -3,7 +3,6 @@ use futures::FutureExt;
 use glam::{Mat4, Vec3};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem::size_of;
 use std::ops::Range;
 use std::rc::Rc;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -12,6 +11,7 @@ use wasm_webxr_helpers::{button_click_future, create_button};
 use wgpu::util::DeviceExt;
 
 mod assets;
+mod buffers;
 mod caching;
 mod pipelines;
 
@@ -19,6 +19,7 @@ use assets::{
     load_gltf_from_bytes, load_single_pixel_image, FetchedImages, Format, ModelLoadContext,
     ModelPrimitive,
 };
+use buffers::{InstanceBuffer, VertexBuffers};
 use caching::ResourceCache;
 use pipelines::Pipelines;
 
@@ -351,6 +352,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         multiview,
     );
 
+    let vertex_buffers = Rc::new(RefCell::new(VertexBuffers::new(1024, &device)));
+    let index_buffer = Rc::new(RefCell::new(buffers::IndexBuffer::new(1024, &device)));
+
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
         queue: Rc::clone(&queue),
@@ -390,6 +394,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         bc6h_supported: adapter
             .features()
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+        vertex_buffers: Rc::clone(&vertex_buffers),
+        index_buffer: Rc::clone(&index_buffer),
     });
 
     let models = Rc::new(RefCell::new(slotmap::SlotMap::new()));
@@ -630,7 +636,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let mut egui_renderer =
         egui_wgpu::renderer::RenderPass::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, 1);
 
-    let mut instance_buffer = InstanceBuffer::new(10, &device);
+    let mut instance_buffer =
+        InstanceBuffer::new(10, &device, wgpu::BufferUsages::VERTEX, "instance buffer");
 
     wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |time, frame| {
         let time = time / 1000.0;
@@ -707,7 +714,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 if let Some((x, y)) = axes
                     .get(2)
                     .as_f64()
-                    .and_then(|x| axes.get(3).as_f64().map(|y| ((x, y))))
+                    .and_then(|x| axes.get(3).as_f64().map(|y| (x, y)))
                 {
                     if i == 0 {
                         *movement.borrow_mut() =
@@ -1070,6 +1077,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             Some(wgpu::Color::TRANSPARENT),
         );
 
+        let vertex_buffers = vertex_buffers.borrow();
+        let index_buffer = index_buffer.borrow();
+
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
             color_attachments: &[wgpu::RenderPassColorAttachment {
@@ -1094,6 +1104,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         });
 
         render_pass.set_bind_group(0, &uniform_bind_group, &[]);
+
+        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
+        render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
+        render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
         render_pass.set_vertex_buffer(3, instance_buffer.buffer.slice(..));
 
         if let Some((mirror_model, mirror_model_instances)) = mirror_model {
@@ -1103,9 +1118,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             render_pass.set_pipeline(&pipelines.stencil_write);
 
-            bind_model_buffers(&mut render_pass, mirror_model);
             render_pass.draw_indexed(
-                0..mirror_model.num_indices,
+                mirror_model.index_buffer_range.clone(),
                 0,
                 mirror_model_instances.clone(),
             );
@@ -1170,9 +1184,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             {
                 render_pass.set_pipeline(&pipelines.set_depth);
-
-                bind_model_buffers(&mut render_pass, mirror_model);
-                render_pass.draw_indexed(0..mirror_model.num_indices, 0, mirror_model_instances);
+                render_pass.draw_indexed(
+                    mirror_model.index_buffer_range.clone(),
+                    0,
+                    mirror_model_instances,
+                );
             }
         }
 
@@ -1237,11 +1253,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
             let ui_plane_model = ui_plane_model.model.as_ref().unwrap();
 
-            bind_model_buffers(&mut render_pass, ui_plane_model);
-
             render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
-
-            render_pass.draw_indexed(0..ui_plane_model.num_indices, 0, ui_plane_instance_range);
+            render_pass.draw_indexed(
+                ui_plane_model.index_buffer_range.clone(),
+                0,
+                ui_plane_instance_range,
+            );
         }
 
         drop(render_pass);
@@ -1533,25 +1550,6 @@ struct PlayerState {
     hands: [Instance; 2],
 }
 
-fn bind_model_buffers<'a>(render_pass: &mut wgpu::RenderPass<'a>, model: &'a assets::Model) {
-    render_pass.set_vertex_buffer(0, model.positions.slice(..));
-    render_pass.set_vertex_buffer(1, model.normals.slice(..));
-    render_pass.set_vertex_buffer(2, model.uvs.slice(..));
-    render_pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
-}
-
-fn render_primitives<'a>(
-    render_pass: &mut wgpu::RenderPass<'a>,
-    primitives: &'a [ModelPrimitive],
-    bind_groups: &'a [std::cell::Ref<wgpu::BindGroup>],
-    instance_range: std::ops::Range<u32>,
-) {
-    for (primitive_index, primitive) in primitives.iter().enumerate() {
-        render_pass.set_bind_group(1, &bind_groups[primitive_index], &[]);
-        render_pass.draw_indexed(primitive.indices_range.clone(), 0, instance_range.clone());
-    }
-}
-
 struct ModelBindGroups<'a> {
     opaque: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
     alpha_clipped: Vec<Vec<std::cell::Ref<'a, wgpu::BindGroup>>>,
@@ -1578,34 +1576,34 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
         models.values().zip(model_instances).enumerate()
     {
         if let Some(model) = &instanced_model.model {
-            bind_model_buffers(render_pass, model);
-
-            render_primitives(
-                render_pass,
-                primitives_getter(model),
-                &bind_groups[model_index],
-                instance_range.clone(),
-            );
+            for (primitive_index, primitive) in primitives_getter(model).iter().enumerate() {
+                render_pass.set_bind_group(1, &bind_groups[model_index][primitive_index], &[]);
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    instance_range.clone(),
+                );
+            }
         }
     }
 
-    bind_model_buffers(render_pass, heads.model);
+    for (primitive_index, primitive) in primitives_getter(heads.model).iter().enumerate() {
+        render_pass.set_bind_group(1, &heads.bind_groups[primitive_index], &[]);
+        render_pass.draw_indexed(
+            primitive.index_buffer_range.clone(),
+            0,
+            heads.instance_range.clone(),
+        );
+    }
 
-    render_primitives(
-        render_pass,
-        primitives_getter(heads.model),
-        heads.bind_groups,
-        heads.instance_range.clone(),
-    );
-
-    bind_model_buffers(render_pass, hands.model);
-
-    render_primitives(
-        render_pass,
-        primitives_getter(hands.model),
-        hands.bind_groups,
-        hands.instance_range.clone(),
-    );
+    for (primitive_index, primitive) in primitives_getter(hands.model).iter().enumerate() {
+        render_pass.set_bind_group(1, &hands.bind_groups[primitive_index], &[]);
+        render_pass.draw_indexed(
+            primitive.index_buffer_range.clone(),
+            0,
+            hands.instance_range.clone(),
+        );
+    }
 }
 
 struct InstancedModel {
@@ -1712,87 +1710,6 @@ async fn load_model(
     }
 
     Ok(())
-}
-
-struct InstanceBuffer {
-    offset: u32,
-    capacity: u32,
-    buffer: wgpu::Buffer,
-}
-
-impl InstanceBuffer {
-    fn size_in_bytes(size: u32) -> u64 {
-        size as u64 * size_of::<Instance>() as u64
-    }
-
-    fn new(capacity: u32, device: &wgpu::Device) -> Self {
-        Self {
-            offset: Default::default(),
-            capacity,
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("instance buffer"),
-                size: Self::size_in_bytes(capacity),
-                usage: wgpu::BufferUsages::VERTEX
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.offset = 0;
-    }
-
-    fn push(
-        &mut self,
-        instances: &[Instance],
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        command_encoder: &mut wgpu::CommandEncoder,
-    ) -> Range<u32> {
-        let start = self.offset;
-        let end = start + instances.len() as u32;
-
-        if end > self.capacity {
-            self.resize(end, device, command_encoder);
-        }
-
-        queue.write_buffer(
-            &self.buffer,
-            Self::size_in_bytes(start),
-            bytemuck::cast_slice(instances),
-        );
-
-        self.offset = end;
-
-        start..end
-    }
-
-    fn resize(
-        &mut self,
-        required_capacity: u32,
-        device: &wgpu::Device,
-        command_encoder: &mut wgpu::CommandEncoder,
-    ) {
-        let copy_size = Self::size_in_bytes(self.offset);
-
-        let new_capacity = required_capacity.max(self.capacity * 2);
-
-        let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("instance buffer"),
-            size: Self::size_in_bytes(new_capacity),
-            usage: wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        command_encoder.copy_buffer_to_buffer(&self.buffer, 0, &new_buffer, 0, copy_size);
-
-        self.buffer = new_buffer;
-        self.capacity = new_capacity;
-    }
 }
 
 fn vec_to_dom_point(vec: Vec3) -> web_sys::DomPointInit {
