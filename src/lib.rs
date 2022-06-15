@@ -7,13 +7,13 @@ use std::ops::Range;
 use std::rc::Rc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsCast;
-use wasm_webxr_helpers::{button_click_future, create_button};
 use wgpu::util::DeviceExt;
 
 mod assets;
 mod buffers;
 mod caching;
 mod pipelines;
+mod js_helpers;
 
 use assets::{
     load_gltf_from_bytes, load_single_pixel_image, FetchedImages, Format, ModelLoadContext,
@@ -22,6 +22,7 @@ use assets::{
 use buffers::{InstanceBuffer, VertexBuffers};
 use caching::ResourceCache;
 use pipelines::Pipelines;
+use js_helpers::{append_break, button_click_future, create_button};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -106,9 +107,9 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let start_vr_future = button_click_future(&vr_button);
     let start_ar_future = button_click_future(&ar_button);
 
-    let canvas = wasm_webxr_helpers::Canvas::default();
+    let canvas = js_helpers::Canvas::default();
     let webgl2_context =
-        canvas.create_webgl2_context(wasm_webxr_helpers::ContextCreationOptions { stencil: true });
+        canvas.create_webgl2_context(js_helpers::ContextCreationOptions { stencil: true });
 
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
@@ -639,7 +640,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let mut instance_buffer =
         InstanceBuffer::new(10, &device, wgpu::BufferUsages::VERTEX, "instance buffer");
 
-    wasm_webxr_helpers::Session { inner: xr_session }.run_rendering_loop(move |time, frame| {
+    js_helpers::Session { inner: xr_session }.run_rendering_loop(move |time, frame| {
         let time = time / 1000.0;
 
         let egui_input = egui::RawInput {
@@ -1673,25 +1674,6 @@ where
         .base_url(Some(&href))
         .parse(&relative)
         .map_err(serde::de::Error::custom)
-}
-
-pub fn append_break() {
-    let br: web_sys::HtmlBrElement = web_sys::window()
-        .unwrap()
-        .document()
-        .unwrap()
-        .create_element("br")
-        .unwrap()
-        .unchecked_into();
-
-    let body = web_sys::window()
-        .unwrap()
-        .document()
-        .unwrap()
-        .body()
-        .unwrap();
-
-    body.append_child(&web_sys::Element::from(br)).unwrap();
 }
 
 type Models = Rc<RefCell<slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>>>;

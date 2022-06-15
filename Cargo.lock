@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "basis-universal-wasm"
 version = "0.1.0"
-source = "git+https://github.com/expenses/basis-universal-rs-wasm#4af203625239a6c733574ae2971eeb3d25b77872"
+source = "git+https://github.com/expenses/basis-universal-rs-wasm#f260472a6c82e5c7c972ddfd2c80fbf721d79d90"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -277,8 +277,9 @@ dependencies = [
 
 [[package]]
 name = "crevice"
-version = "0.8.0"
-source = "git+https://github.com/LPGhatguy/crevice#0863f8508ab34f8625b4b2d29f5829b42969f7f1"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d79e92f72ddc74a13872806c9d29ee81b80b83bc02ba2af63465f88466f8f68"
 dependencies = [
  "bytemuck",
  "crevice-derive",
@@ -288,8 +289,9 @@ dependencies = [
 
 [[package]]
 name = "crevice-derive"
-version = "0.8.0"
-source = "git+https://github.com/LPGhatguy/crevice#0863f8508ab34f8625b4b2d29f5829b42969f7f1"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2320c07ceb3e491e2bd09ade90a91c29a42d9553f1bde60c945cb5c34958b26e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -526,19 +528,19 @@ dependencies = [
 [[package]]
 name = "gltf"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00e0a0eace786193fc83644907097285396360e9e82e30f81a21e9b1ba836a3e"
+source = "git+https://github.com/expenses/gltf?branch=third-party-extensions#dbb2b6770853210596452b7964d31c49d0ae2a3e"
 dependencies = [
  "byteorder",
+ "gltf-derive",
  "gltf-json",
  "lazy_static",
+ "urlencoding",
 ]
 
 [[package]]
 name = "gltf-derive"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd53d6e284bb2bf02a6926e4cc4984978c1990914d6cd9deae4e31cf37cd113"
+source = "git+https://github.com/expenses/gltf?branch=third-party-extensions#dbb2b6770853210596452b7964d31c49d0ae2a3e"
 dependencies = [
  "inflections",
  "proc-macro2",
@@ -549,7 +551,6 @@ dependencies = [
 [[package]]
 name = "gltf-helpers"
 version = "0.1.0"
-source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#ddb3e4f3f5292863aad8f5aca14999a9cc309eaf"
 dependencies = [
  "bytemuck",
  "glam",
@@ -561,8 +562,7 @@ dependencies = [
 [[package]]
 name = "gltf-json"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9949836a9ec5e7f83f76fb9bbcbc77f254a577ebbdb0820867bc11979ef97cad"
+source = "git+https://github.com/expenses/gltf?branch=third-party-extensions#dbb2b6770853210596452b7964d31c49d0ae2a3e"
 dependencies = [
  "gltf-derive",
  "serde",
@@ -808,6 +808,7 @@ dependencies = [
  "ktx2",
  "log",
  "range-alloc 0.1.2 (git+https://github.com/expenses/gfx?branch=range-allocator)",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "shared-structs",
@@ -816,8 +817,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-futures-executor",
- "wasm-web-helpers",
- "wasm-webxr-helpers",
  "web-sys",
  "wgpu",
  "wgpu-hal",
@@ -1340,6 +1339,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlencoding"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68b90931029ab9b034b300b797048cf23723400aa757e8a2bfb9d748102f9821"
+
+[[package]]
 name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1424,26 +1429,6 @@ dependencies = [
  "log",
  "parking_lot",
  "tokio",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "wasm-web-helpers"
-version = "0.1.0"
-source = "git+https://github.com/expenses/kiss-engine?branch=working-on-real-hw#ddb3e4f3f5292863aad8f5aca14999a9cc309eaf"
-dependencies = [
- "web-sys",
-]
-
-[[package]]
-name = "wasm-webxr-helpers"
-version = "0.1.0"
-source = "git+https://github.com/expenses/wasm-webxr-helpers#98b2a43b2a7719b9733d7a0805d815740223a88b"
-dependencies = [
- "js-sys",
- "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
