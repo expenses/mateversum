@@ -1,3 +1,4 @@
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
 pub struct ContextCreationOptions {
@@ -71,6 +72,15 @@ unsafe impl raw_window_handle::HasRawWindowHandle for Canvas {
     }
 }
 
+pub(crate) fn request_animation_frame(
+    session: &web_sys::XrSession,
+    f: &Closure<dyn FnMut(f64, web_sys::XrFrame)>,
+) -> u32 {
+    // This turns the Closure into a js_sys::Function
+    // See https://rustwasm.github.io/wasm-bindgen/api/wasm_bindgen/closure/struct.Closure.html#casting-a-closure-to-a-js_sysfunction
+    session.request_animation_frame(f.as_ref().unchecked_ref())
+}
+
 pub struct Session {
     pub inner: web_sys::XrSession,
 }
@@ -79,16 +89,6 @@ impl Session {
     pub fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(&self, mut func: F) {
         use std::cell::RefCell;
         use std::rc::Rc;
-        use wasm_bindgen::closure::Closure;
-
-        fn request_animation_frame(
-            session: &web_sys::XrSession,
-            f: &Closure<dyn FnMut(f64, web_sys::XrFrame)>,
-        ) -> u32 {
-            // This turns the Closure into a js_sys::Function
-            // See https://rustwasm.github.io/wasm-bindgen/api/wasm_bindgen/closure/struct.Closure.html#casting-a-closure-to-a-js_sysfunction
-            session.request_animation_frame(f.as_ref().unchecked_ref())
-        }
 
         // Wierd hacky closure stuff that I don't understand. Taken from wasm-bindgen.
         // TODO: link source.

@@ -124,12 +124,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         _ => web_sys::XrReferenceSpaceType::LocalFloor,
     };
 
-    let multiview = if mode == web_sys::XrSessionMode::ImmersiveVr {
-        Some(std::num::NonZeroU32::new(2).unwrap())
-    } else {
-        None
-    };
-
     let required_features = js_sys::Array::of1(&"local-floor".into());
 
     let xr_session: web_sys::XrSession =
@@ -161,6 +155,22 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     )
     .await?
     .into();
+
+    let reference_space = Rc::new(reference_space);
+
+    let num_views = get_num_views(&xr_session, &reference_space).await;
+
+    // Todo: while ImmersiveVr mode is always going to have 2 (or 4 for wierd experimental headsets)
+    // views, and desktop/flatscreen mode will always have 1, the number of views in AR mode depends
+    // the headset. For phones it's 1. For hololens etc it's 2.
+    //
+    // Unfortunately we can't get out the number of views the device has until rendering has started
+    // because of 'fingerprinting concerns':
+    let multiview = if num_views > 1 {
+        Some(std::num::NonZeroU32::new(num_views).unwrap())
+    } else {
+        None
+    };
 
     let backend = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
     let instance = wgpu::Instance::new(backend);
@@ -1712,4 +1722,29 @@ fn quat_to_dom_point(quat: glam::Quat) -> web_sys::DomPointInit {
         .w(quat.w as f64);
 
     dom_point
+}
+
+// mega hacky solution to the problem that we can only get the number of views inside a frame.
+// https://github.com/immersive-web/webxr/issues/1098
+async fn get_num_views(
+    session: &web_sys::XrSession,
+    reference_space: &Rc<web_sys::XrReferenceSpace>,
+) -> u32 {
+    let (num_views_sender, num_views_receiver) = futures::channel::oneshot::channel();
+
+    let closure = wasm_bindgen::closure::Closure::once({
+        let reference_space = Rc::clone(reference_space);
+
+        move |_time: f64, frame: web_sys::XrFrame| {
+            let pose = frame.get_viewer_pose(&reference_space).unwrap();
+            num_views_sender.send(pose.views().length()).unwrap();
+        }
+    });
+
+    js_helpers::request_animation_frame(session, &closure);
+
+    let num_views = num_views_receiver.await.unwrap();
+    log::info!("xyz: {:?}", num_views);
+
+    num_views
 }
