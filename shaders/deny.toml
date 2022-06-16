@@ -77,7 +77,7 @@ unlicensed = "deny"
 # [possible values: any SPDX 3.11 short identifier (+ optional exception)].
 allow = [
     "MIT",
-    "Apache-2.0",
+    #"Apache-2.0",
     #"Apache-2.0 WITH LLVM-exception",
 ]
 # List of explicitly disallowed licenses
@@ -110,10 +110,7 @@ confidence-threshold = 0.8
 exceptions = [
     # Each entry is the crate and version constraint, and its specific allow
     # list
-    { allow = ["Zlib"], name = "adler32", version = "*" },
-    { allow = ["Zlib"], name = "slotmap", version = "*" },
-    { allow = ["ISC"], name = "libloading", version = "*" },
-    { allow = ["CC0-1.0"], name = "hexf-parse", version = "*" },
+    #{ allow = ["Zlib"], name = "adler32", version = "*" },
 ]
 
 # Some crates don't have (easily) machine readable licensing information,
@@ -179,7 +176,7 @@ deny = [
 ]
 # Certain crates/versions that will be skipped when doing duplicate detection.
 skip = [
-    { name = "range-alloc", version = "=0.1.2" }
+    #{ name = "ansi_term", version = "=0.11.0" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive
@@ -203,11 +200,11 @@ unknown-git = "warn"
 # if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # List of URLs for allowed Git repositories
-allow-git = ["https://github.com/wngr/wasm-futures-executor", "https://github.com/BVE-Reborn/ktx2"]
+allow-git = ["https://github.com/EmbarkStudios/rust-gpu"]
 
 [sources.allow-org]
 # 1 or more github.com organizations to allow git sources for
-github = ["expenses", "gfx-rs"]
+github = ["expenses"]
 # 1 or more gitlab.com organizations to allow git sources for
 gitlab = []
 # 1 or more bitbucket.org organizations to allow git sources for

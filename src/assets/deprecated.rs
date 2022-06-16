@@ -318,12 +318,12 @@ pub(super) fn load_ktx2_sync(
         let decompressed = match header.supercompression_scheme {
             Some(ktx2::SupercompressionScheme::Zstandard) => {
                 let decompressed =
-                    zstd::bulk::decompress(level.bytes, level.uncompressed_byte_length as usize)
+                    zstd::bulk::decompress(level.data, level.uncompressed_byte_length as usize)
                         .unwrap();
                 std::borrow::Cow::Owned(decompressed)
             }
             Some(other) => panic!("Unsupported: {:?}", other),
-            None => std::borrow::Cow::Borrowed(level.bytes),
+            None => std::borrow::Cow::Borrowed(level.data),
         };
 
         let slice_width = header.pixel_width >> i;
