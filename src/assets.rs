@@ -3,6 +3,7 @@ use crevice::std140::AsStd140;
 use glam::{Vec2, Vec3};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Read;
 use std::num::NonZeroU32;
 use std::ops::Range;
@@ -38,7 +39,7 @@ pub(crate) struct ModelLoadContext {
 }
 
 struct ModelBuffers {
-    map: std::collections::HashMap<usize, Vec<u8>>,
+    map: HashMap<usize, Vec<u8>>,
 }
 
 struct MaterialTexture {
@@ -395,6 +396,9 @@ pub(crate) async fn load_gltf_from_bytes(
             // Note: it's possible to render double-sided objects with a backface-culling shader if we double the
             // triangles in the index buffer but with a backwards winding order. It's only worth doing this to keep
             // the number of shader permutations down.
+            //
+            // One thing to keep in mind is that we flip the shading normals according to the gltf spec:
+            // https://www.khronos.org/registry/glTF/specs/2.0/glTF-2.0.html#double-sided
 
             let primitive_map = match (material.alpha_mode(), material.double_sided()) {
                 (gltf::material::AlphaMode::Opaque, false) => &mut opaque_primitives,

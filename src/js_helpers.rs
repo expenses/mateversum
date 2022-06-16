@@ -1,23 +1,23 @@
 use wasm_bindgen::JsCast;
 
 pub struct ContextCreationOptions {
-    pub stencil: bool
+    pub stencil: bool,
 }
 
 pub struct Canvas {
     pub inner: web_sys::HtmlCanvasElement,
-    id: u32
+    id: u32,
 }
 
 impl Canvas {
     pub fn new_with_id(id: u32) -> Self {
         let canvas: web_sys::HtmlCanvasElement = web_sys::window()
-        .unwrap()
-        .document()
-        .unwrap()
-        .create_element("canvas")
-        .unwrap()
-        .unchecked_into();
+            .unwrap()
+            .document()
+            .unwrap()
+            .create_element("canvas")
+            .unwrap()
+            .unchecked_into();
 
         let body = web_sys::window()
             .unwrap()
@@ -26,19 +26,20 @@ impl Canvas {
             .body()
             .unwrap();
 
-        canvas.set_attribute("data-raw-handle", &id.to_string()).unwrap();
+        canvas
+            .set_attribute("data-raw-handle", &id.to_string())
+            .unwrap();
 
         body.append_child(&web_sys::Element::from(canvas.clone()))
             .unwrap();
 
-        Self {
-            inner: canvas,
-            id
-        }
-
+        Self { inner: canvas, id }
     }
 
-    pub fn create_webgl2_context(&self, options: ContextCreationOptions) -> web_sys::WebGl2RenderingContext {
+    pub fn create_webgl2_context(
+        &self,
+        options: ContextCreationOptions,
+    ) -> web_sys::WebGl2RenderingContext {
         let mut gl_attribs = std::collections::HashMap::new();
         gl_attribs.insert(String::from("xrCompatible"), true);
         // WebGL silently ignores any stencil writing or testing if this is not set.
@@ -61,7 +62,6 @@ impl Default for Canvas {
     }
 }
 
-
 unsafe impl raw_window_handle::HasRawWindowHandle for Canvas {
     fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
         let mut web = raw_window_handle::WebHandle::empty();
@@ -71,16 +71,12 @@ unsafe impl raw_window_handle::HasRawWindowHandle for Canvas {
     }
 }
 
-
 pub struct Session {
-    pub inner: web_sys::XrSession
+    pub inner: web_sys::XrSession,
 }
 
 impl Session {
-    pub fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(
-        &self,
-        mut func: F,
-    ) {
+    pub fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(&self, mut func: F) {
         use std::cell::RefCell;
         use std::rc::Rc;
         use wasm_bindgen::closure::Closure;

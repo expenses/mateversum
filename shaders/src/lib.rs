@@ -120,6 +120,7 @@ pub fn fragment(
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
     #[spirv(view_index)] view_index: i32,
+    #[spirv(front_facing)] front_facing: bool,
     output: &mut Vec4,
 ) {
     let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
@@ -145,7 +146,7 @@ pub fn fragment(
 
     let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
-    let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
+    let normal = calculate_normal(normal, uv, view_vector, &normal_texture, front_facing);
     let view = glam_pbr::View(view_vector);
 
     let lut_values = glam_pbr::ggx_lut_lookup(
@@ -205,6 +206,7 @@ pub fn fragment_alpha_clipped(
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
     #[spirv(view_index)] view_index: i32,
+    #[spirv(front_facing)] front_facing: bool,
     output: &mut Vec4,
 ) {
     let albedo_texture = TextureSampler::new(albedo_texture, *albedo_texture_sampler, uv);
@@ -225,7 +227,7 @@ pub fn fragment_alpha_clipped(
 
     let view_vector = (uniforms.eye_position(view_index) - position).normalize();
 
-    let normal = calculate_normal(normal, uv, view_vector, &normal_texture);
+    let normal = calculate_normal(normal, uv, view_vector, &normal_texture, front_facing);
     let view = glam_pbr::View(view_vector);
 
     // We can only do this after we've sampled all textures for naga control flow reasons.
@@ -297,8 +299,13 @@ fn calculate_normal(
     uv: Vec2,
     view_vector: Vec3,
     normal_map: &TextureSampler,
+    front_facing: bool,
 ) -> glam_pbr::Normal {
-    let normal = interpolated_normal.normalize();
+    let mut normal = interpolated_normal.normalize();
+
+    if !front_facing {
+        normal = -normal;
+    }
 
     let map_normal = normal_map.sample();
     let map_normal = map_normal.truncate();

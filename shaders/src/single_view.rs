@@ -47,6 +47,7 @@ pub fn fragment(
     #[spirv(descriptor_set = 1, binding = 6)] normal_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    #[spirv(front_facing)] front_facing: bool,
     output: &mut Vec4,
 ) {
     super::fragment(
@@ -68,6 +69,7 @@ pub fn fragment(
         metallic_roughness_texture_sampler,
         emissive_texture_sampler,
         0,
+        front_facing,
         output,
     );
 }
@@ -91,6 +93,7 @@ pub fn fragment_alpha_clipped(
     #[spirv(descriptor_set = 1, binding = 6)] normal_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 7)] metallic_roughness_texture_sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 8)] emissive_texture_sampler: &Sampler,
+    #[spirv(front_facing)] front_facing: bool,
     output: &mut Vec4,
 ) {
     super::fragment_alpha_clipped(
@@ -112,6 +115,7 @@ pub fn fragment_alpha_clipped(
         metallic_roughness_texture_sampler,
         emissive_texture_sampler,
         0,
+        front_facing,
         output,
     );
 }

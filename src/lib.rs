@@ -12,8 +12,8 @@ use wgpu::util::DeviceExt;
 mod assets;
 mod buffers;
 mod caching;
-mod pipelines;
 mod js_helpers;
+mod pipelines;
 
 use assets::{
     load_gltf_from_bytes, load_single_pixel_image, FetchedImages, Format, ModelLoadContext,
@@ -21,8 +21,8 @@ use assets::{
 };
 use buffers::{InstanceBuffer, VertexBuffers};
 use caching::ResourceCache;
-use pipelines::Pipelines;
 use js_helpers::{append_break, button_click_future, create_button};
+use pipelines::Pipelines;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
