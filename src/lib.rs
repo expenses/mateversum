@@ -1736,15 +1736,12 @@ async fn get_num_views(
         let reference_space = Rc::clone(reference_space);
 
         move |_time: f64, frame: web_sys::XrFrame| {
-            let pose = frame.get_viewer_pose(&reference_space).unwrap();
-            num_views_sender.send(pose.views().length()).unwrap();
+            let pose = frame.get_viewer_pose(&reference_space).expect("Getting the viewer pose failed. Perhaps the headset has not started");
+            num_views_sender.send(pose.views().length()).expect("Sending on this channel should not fail because we don't drop the receiver first");
         }
     });
 
     js_helpers::request_animation_frame(session, &closure);
 
-    let num_views = num_views_receiver.await.unwrap();
-    log::info!("xyz: {:?}", num_views);
-
-    num_views
+    num_views_receiver.await.expect("Something went wrong in the closure.")
 }
