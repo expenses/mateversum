@@ -128,6 +128,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let multiview;
     // Whether we're using a fp16 HDR framebuffer that we then tonemap or doing the tonemapping at the end of fragment shaders.
+    // Turning this off makes rendering faster at the cost of not being able to do nice post processing effects like bloom.
     let inline_tonemapping;
     let render_skybox;
 
