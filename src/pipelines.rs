@@ -18,9 +18,10 @@ impl PipelineSet {
         alpha_clipped_fragment: wgpu::FragmentState,
         multiview: Option<std::num::NonZeroU32>,
         double_sided: bool,
+        front_face: wgpu::FrontFace,
     ) -> Self {
         let normal_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Ccw,
+            front_face,
             cull_mode: if !double_sided {
                 Some(wgpu::Face::Back)
             } else {
@@ -58,7 +59,10 @@ impl PipelineSet {
         };
 
         let mirrored_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Cw,
+            front_face: match front_face {
+                wgpu::FrontFace::Ccw => wgpu::FrontFace::Cw,
+                wgpu::FrontFace::Cw => wgpu::FrontFace::Ccw,
+            },
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
@@ -132,7 +136,21 @@ impl Pipelines {
         ui_texture_bgl: &wgpu::BindGroupLayout,
         skybox_bgl: &wgpu::BindGroupLayout,
         multiview: Option<std::num::NonZeroU32>,
+        render_direct_to_framebuffer: bool,
+        inline_tonemapping: bool,
     ) -> Self {
+        let target_format = if inline_tonemapping {
+            wgpu::TextureFormat::Rgba8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        };
+
+        let front_face = if render_direct_to_framebuffer {
+            wgpu::FrontFace::Cw
+        } else {
+            wgpu::FrontFace::Ccw
+        };
+
         let uniform_only_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("uniform only pipeline layout"),
@@ -189,7 +207,7 @@ impl Pipelines {
         };
 
         let normal_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Ccw,
+            front_face,
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
@@ -205,7 +223,7 @@ impl Pipelines {
         let tonemap_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[tonemap_bgl],
+                bind_group_layouts: &[uniform_bgl, tonemap_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -259,7 +277,7 @@ impl Pipelines {
                     }),
                     entry_point: "flat_blue",
                     targets: &[wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: target_format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::empty(),
                     }],
@@ -294,7 +312,7 @@ impl Pipelines {
                 }),
                 entry_point: "flat_blue",
                 targets: &[wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
+                    format: target_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::empty(),
                 }],
@@ -325,7 +343,7 @@ impl Pipelines {
         };
 
         let normal_primitive_state = wgpu::PrimitiveState {
-            front_face: wgpu::FrontFace::Ccw,
+            front_face,
             cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         };
@@ -367,7 +385,7 @@ impl Pipelines {
                 })
             }),
             entry_point: &format!("{}fragment", prefix),
-            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+            targets: &[target_format.into()],
         };
 
         let fragment_alpha_clipped = wgpu::FragmentState {
@@ -381,7 +399,7 @@ impl Pipelines {
                 })
             }),
             entry_point: &format!("{}fragment_alpha_clipped", prefix),
-            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+            targets: &[target_format.into()],
         };
 
         Self {
@@ -395,6 +413,7 @@ impl Pipelines {
                 fragment_alpha_clipped.clone(),
                 multiview,
                 false,
+                front_face,
             ),
             pbr_double_sided: PipelineSet::new(
                 device,
@@ -406,6 +425,7 @@ impl Pipelines {
                 fragment_alpha_clipped.clone(),
                 multiview,
                 true,
+                front_face,
             ),
             stencil_write: stencil_write_pipeline,
             set_depth: set_depth_pipeline,
@@ -422,7 +442,7 @@ impl Pipelines {
                     }),
                     entry_point: "fragment_ui",
                     targets: &[wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
+                        format: target_format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     }],
@@ -455,7 +475,7 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "fragment_skybox",
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+                    targets: &[target_format.into()],
                 }),
                 primitive: Default::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -491,7 +511,7 @@ impl Pipelines {
                         ))
                     }),
                     entry_point: "fragment_skybox",
-                    targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+                    targets: &[target_format.into()],
                 }),
                 primitive: Default::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {

@@ -19,7 +19,7 @@ use assets::{
     load_gltf_from_bytes, load_single_pixel_image, FetchedImages, Format, ModelLoadContext,
     ModelPrimitive,
 };
-use buffers::{InstanceBuffer, VertexBuffers};
+use buffers::{IndexBuffer, InstanceBuffer, VertexBuffers};
 use caching::ResourceCache;
 use js_helpers::{append_break, button_click_future, create_button};
 use pipelines::Pipelines;
@@ -124,11 +124,25 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         _ => web_sys::XrReferenceSpaceType::LocalFloor,
     };
 
-    let multiview = if mode == web_sys::XrSessionMode::ImmersiveVr {
-        Some(std::num::NonZeroU32::new(2).unwrap())
+    // Some performance settings.
+
+    let multiview;
+    // Whether we're using a fp16 HDR framebuffer that we then tonemap or doing the tonemapping at the end of fragment shaders.
+    let inline_tonemapping;
+    let render_skybox;
+
+    if mode == web_sys::XrSessionMode::ImmersiveVr {
+        multiview = Some(std::num::NonZeroU32::new(2).unwrap());
+
+        inline_tonemapping = false;
+        render_skybox = true;
     } else {
-        None
+        multiview = None;
+        inline_tonemapping = true;
+        render_skybox = false;
     };
+
+    let render_direct_to_framebuffer = multiview.is_none() && inline_tonemapping;
 
     let required_features = js_sys::Array::of1(&"local-floor".into());
 
@@ -142,7 +156,10 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let mut layer_init = web_sys::XrWebGlLayerInit::new();
 
-    layer_init.alpha(false).depth(false).stencil(false);
+    layer_init
+        .alpha(false)
+        .depth(render_direct_to_framebuffer)
+        .stencil(render_direct_to_framebuffer);
 
     let xr_gl_layer = web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(
         &xr_session,
@@ -351,10 +368,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &ui_texture_bgl,
         &skybox_bgl,
         multiview,
+        render_direct_to_framebuffer,
+        inline_tonemapping,
     );
 
     let vertex_buffers = Rc::new(RefCell::new(VertexBuffers::new(1024, &device)));
-    let index_buffer = Rc::new(RefCell::new(buffers::IndexBuffer::new(1024, &device)));
+    let index_buffer = Rc::new(RefCell::new(IndexBuffer::new(1024, &device)));
 
     let context = Rc::new(ModelLoadContext {
         device: Rc::clone(&device),
@@ -552,7 +571,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("uniform buffer"),
-        size: std::mem::size_of::<shared_structs::Uniforms>() as u64,
+        size: std::mem::size_of::<<shared_structs::Uniforms as AsStd140>::Output>() as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         mapped_at_creation: false,
     });
@@ -791,6 +810,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         right_projection_view,
                         left_eye_position: left_instance.position,
                         right_eye_position: right_instance.position,
+                        render_direct_to_framebuffer: render_direct_to_framebuffer as u32,
+                        inline_tonemapping: inline_tonemapping as u32,
                     }
                     .as_std140(),
                 ),
@@ -825,72 +846,54 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             }
         }
 
-        let framebuffer = js_sys::Reflect::get(&base_layer, &"framebuffer".into())
-            .unwrap()
-            .into();
+        let framebuffer: web_sys::WebGlFramebuffer =
+            js_sys::Reflect::get(&base_layer, &"framebuffer".into())
+                .unwrap()
+                .into();
 
-        let view = unsafe {
-            device.create_texture_from_hal::<wgpu_hal::gles::Api>(
-                wgpu_hal::gles::Texture {
-                    inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
-                    mip_level_count: 1,
-                    array_layer_count: 1,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    format_desc: wgpu_hal::gles::TextureFormatDesc {
-                        internal: glow::RGBA,
-                        external: glow::RGBA,
-                        data_type: glow::UNSIGNED_BYTE,
-                    },
-                    copy_size: wgpu_hal::CopyExtent {
-                        width: base_layer.framebuffer_width(),
-                        height: base_layer.framebuffer_height(),
-                        depth: 1,
-                    },
-                    is_cubemap: false,
-                },
-                &wgpu::TextureDescriptor {
-                    label: Some("framebuffer (color)"),
-                    size: wgpu::Extent3d {
-                        width: base_layer.framebuffer_width(),
-                        height: base_layer.framebuffer_height(),
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                },
-            )
-        }
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        let framebuffer_colour_attachment = create_view_from_device_framebuffer(
+            &device,
+            framebuffer.clone(),
+            &base_layer,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "device framebuffer (colour)",
+            wgpu::TextureUsages::COPY_DST,
+        );
 
         let num_views = multiview.map(|views| views.get()).unwrap_or(1);
 
-        let hdr_framebuffer = framebuffer_cache.get("hdr framebuffer", || {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("hdr framebuffer"),
-                    size: wgpu::Extent3d {
-                        width: base_layer.framebuffer_width() / num_views,
-                        height: base_layer.framebuffer_height(),
-                        depth_or_array_layers: num_views,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                })
-                .create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(if multiview.is_none() {
-                        wgpu::TextureViewDimension::D2
-                    } else {
-                        wgpu::TextureViewDimension::D2Array
-                    }),
-                    ..Default::default()
-                })
+        // todo: resize this if the frmaebuffer dimensions change.
+        let hdr_or_multiview_framebuffer = framebuffer_cache.get("hdr framebuffer", || {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("hdr framebuffer"),
+                size: wgpu::Extent3d {
+                    width: base_layer.framebuffer_width() / num_views,
+                    height: base_layer.framebuffer_height(),
+                    depth_or_array_layers: num_views,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: if inline_tonemapping {
+                    wgpu::TextureFormat::Rgba8Unorm
+                } else {
+                    wgpu::TextureFormat::Rgba16Float
+                },
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+            });
+
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(if multiview.is_none() {
+                    wgpu::TextureViewDimension::D2
+                } else {
+                    wgpu::TextureViewDimension::D2Array
+                }),
+                ..Default::default()
+            });
+
+            assets::Texture { texture, view }
         });
 
         let tonemap_bind_group = bind_group_cache.get("tonemap bind group", || {
@@ -904,15 +907,27 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(hdr_framebuffer),
+                        resource: wgpu::BindingResource::TextureView(
+                            &hdr_or_multiview_framebuffer.view,
+                        ),
                     },
                 ],
             })
         });
 
-        let depth = framebuffer_cache.get("depth", || {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
+        let depth = if render_direct_to_framebuffer {
+            BorrowedOrOwnedFramebuffer::Owned(create_view_from_device_framebuffer(
+                &device,
+                framebuffer,
+                &base_layer,
+                wgpu::TextureFormat::Depth24PlusStencil8,
+                "device framebuffer (depth)",
+                wgpu::TextureUsages::empty(),
+            ))
+        } else {
+            // todo: resize this if the frmaebuffer dimensions change.
+            BorrowedOrOwnedFramebuffer::Borrowed(framebuffer_cache.get("depth", || {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("depth"),
                     size: wgpu::Extent3d {
                         width: base_layer.framebuffer_width() / num_views,
@@ -924,34 +939,36 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Depth24PlusStencil8,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                })
-                .create_view(&wgpu::TextureViewDescriptor {
+                });
+
+                let view = texture.create_view(&wgpu::TextureViewDescriptor {
                     dimension: Some(if multiview.is_none() {
                         wgpu::TextureViewDimension::D2
                     } else {
                         wgpu::TextureViewDimension::D2Array
                     }),
                     ..Default::default()
-                })
-        });
+                });
+
+                assets::Texture { texture, view }
+            }))
+        };
 
         let ui_texture = framebuffer_cache.get("ui texture", || {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("hdr framebuffer"),
-                    size: wgpu::Extent3d {
-                        width: 1024,
-                        height: 1024,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                })
-                .create_view(&Default::default())
+            assets::Texture::new(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("ui texture"),
+                size: wgpu::Extent3d {
+                    width: 1024,
+                    height: 1024,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            }))
         });
 
         let ui_texture_bind_group = bind_group_cache.get("ui texture bind group", || {
@@ -960,7 +977,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 layout: &ui_texture_bgl,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(ui_texture),
+                    resource: wgpu::BindingResource::TextureView(&ui_texture.view),
                 }],
             })
         });
@@ -1026,7 +1043,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             .map(|primitive| primitive.bind_group.borrow())
             .collect::<Vec<_>>();
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut command_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("command encoder"),
         });
 
@@ -1034,11 +1051,18 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
         let model_instances: Vec<_> = models
             .values()
-            .map(|model| instance_buffer.push(&model.instances, &device, &queue, &mut encoder))
+            .map(|model| {
+                instance_buffer.push(&model.instances, &device, &queue, &mut command_encoder)
+            })
             .collect();
 
         let heads = HeadOrHandsRenderingData {
-            instance_range: instance_buffer.push(&player_heads, &device, &queue, &mut encoder),
+            instance_range: instance_buffer.push(
+                &player_heads,
+                &device,
+                &queue,
+                &mut command_encoder,
+            ),
             model: &head_model,
             bind_groups: &head_primitives,
         };
@@ -1048,14 +1072,19 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &player_heads_mirrored,
                 &device,
                 &queue,
-                &mut encoder,
+                &mut command_encoder,
             ),
             model: &head_model,
             bind_groups: &head_primitives,
         };
 
         let hands = HeadOrHandsRenderingData {
-            instance_range: instance_buffer.push(&player_hands, &device, &queue, &mut encoder),
+            instance_range: instance_buffer.push(
+                &player_hands,
+                &device,
+                &queue,
+                &mut command_encoder,
+            ),
             model: &hand_model,
             bind_groups: &hand_primitives,
         };
@@ -1063,16 +1092,26 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let mirror_model = mirror_model.as_ref().map(|mirror_model| {
             (
                 mirror_model,
-                instance_buffer.push(&mirror_model.instances, &device, &queue, &mut encoder),
+                instance_buffer.push(
+                    &mirror_model.instances,
+                    &device,
+                    &queue,
+                    &mut command_encoder,
+                ),
+                &mirror_uniform_bind_group,
             )
         });
 
-        let ui_plane_instance_range =
-            instance_buffer.push(&ui_plane_model.instances, &device, &queue, &mut encoder);
+        let ui_plane_instance_range = instance_buffer.push(
+            &ui_plane_model.instances,
+            &device,
+            &queue,
+            &mut command_encoder,
+        );
 
         egui_renderer.execute(
-            &mut encoder,
-            ui_texture,
+            &mut command_encoder,
+            &ui_texture.view,
             &egui_primitives,
             &screen_descriptor,
             Some(wgpu::Color::TRANSPARENT),
@@ -1081,10 +1120,14 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         let vertex_buffers = vertex_buffers.borrow();
         let index_buffer = index_buffer.borrow();
 
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("main render pass"),
             color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: hdr_framebuffer,
+                view: if render_direct_to_framebuffer {
+                    &framebuffer_colour_attachment.view
+                } else {
+                    &hdr_or_multiview_framebuffer.view
+                },
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -1092,7 +1135,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 },
             }],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
+                view: &depth.get().view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: true,
@@ -1104,188 +1147,62 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             }),
         });
 
-        render_pass.set_bind_group(0, &uniform_bind_group, &[]);
+        render_everything(
+            &mut render_pass,
+            &pipelines,
+            &models,
+            &model_instances,
+            &model_bind_groups,
+            &index_buffer,
+            &vertex_buffers,
+            &instance_buffer,
+            &uniform_bind_group,
+            &hands,
+            &heads,
+            &heads_mirrored,
+            mirror_model,
+            &UiData {
+                plane_instance_range: ui_plane_instance_range,
+                plane_model: ui_plane_model.model.as_ref().unwrap(),
+                texture_bind_group: ui_texture_bind_group,
+            },
+            &skybox_uniform_bind_group,
+            render_skybox,
+        );
 
-        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
-        render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
-        render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
-        render_pass.set_vertex_buffer(3, instance_buffer.buffer.slice(..));
+        drop(render_pass);
 
-        if let Some((mirror_model, mirror_model_instances)) = mirror_model {
-            let mirror_model = mirror_model.model.as_ref().unwrap();
+        if !render_direct_to_framebuffer {
+            // Blit from the intermediate framebuffer to the device framebuffer,
+            // either tonemapping the colour or just blitting.
+            //
+            // Todo: it'd be great to be able to just do a blit here if `inline_tonemapping` is true.
+            // Doing this through wgpu would involve a lot of code changes to glow etc. but we could just use raw gl potentially.
 
-            render_pass.set_stencil_reference(1);
+            let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tonemap render pass"),
+                color_attachments: &[wgpu::RenderPassColorAttachment {
+                    view: &framebuffer_colour_attachment.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    },
+                }],
+                depth_stencil_attachment: None,
+            });
 
-            render_pass.set_pipeline(&pipelines.stencil_write);
+            render_pass.set_pipeline(&pipelines.tonemap);
 
-            render_pass.draw_indexed(
-                mirror_model.index_buffer_range.clone(),
-                0,
-                mirror_model_instances.clone(),
-            );
+            render_pass.set_bind_group(0, &uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, tonemap_bind_group, &[]);
 
-            render_pass.set_bind_group(2, &mirror_uniform_bind_group, &[]);
-
-            {
-                render_pass.set_pipeline(&pipelines.pbr.opaque_mirrored);
-
-                render_all(
-                    &mut render_pass,
-                    &models,
-                    &model_instances,
-                    |model| &model.opaque_primitives,
-                    &model_bind_groups.opaque,
-                    &heads_mirrored,
-                    &hands,
-                );
-
-                render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque_mirrored);
-
-                render_all(
-                    &mut render_pass,
-                    &models,
-                    &model_instances,
-                    |model| &model.opaque_double_sided_primitives,
-                    &model_bind_groups.opaque_double_sided,
-                    &heads_mirrored,
-                    &hands,
-                );
-
-                render_pass.set_pipeline(&pipelines.pbr.alpha_clipped_mirrored);
-
-                render_all(
-                    &mut render_pass,
-                    &models,
-                    &model_instances,
-                    |model| &model.alpha_clipped_primitives,
-                    &model_bind_groups.alpha_clipped,
-                    &heads_mirrored,
-                    &hands,
-                );
-
-                render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped_mirrored);
-
-                render_all(
-                    &mut render_pass,
-                    &models,
-                    &model_instances,
-                    |model| &model.alpha_clipped_double_sided_primitives,
-                    &model_bind_groups.alpha_clipped_double_sided,
-                    &heads_mirrored,
-                    &hands,
-                );
-            }
-
-            {
-                render_pass.set_pipeline(&pipelines.skybox_mirrored);
-                render_pass.set_bind_group(1, &skybox_uniform_bind_group, &[]);
-                render_pass.draw(0..3, 0..1);
-            }
-
-            {
-                render_pass.set_pipeline(&pipelines.set_depth);
-                render_pass.draw_indexed(
-                    mirror_model.index_buffer_range.clone(),
-                    0,
-                    mirror_model_instances,
-                );
-            }
-        }
-
-        {
-            render_pass.set_pipeline(&pipelines.pbr.opaque);
-
-            render_all(
-                &mut render_pass,
-                &models,
-                &model_instances,
-                |model| &model.opaque_primitives,
-                &model_bind_groups.opaque,
-                &heads,
-                &hands,
-            );
-
-            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
-
-            render_all(
-                &mut render_pass,
-                &models,
-                &model_instances,
-                |model| &model.opaque_double_sided_primitives,
-                &model_bind_groups.opaque_double_sided,
-                &heads,
-                &hands,
-            );
-
-            render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
-
-            render_all(
-                &mut render_pass,
-                &models,
-                &model_instances,
-                |model| &model.alpha_clipped_primitives,
-                &model_bind_groups.alpha_clipped,
-                &heads,
-                &hands,
-            );
-
-            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
-
-            render_all(
-                &mut render_pass,
-                &models,
-                &model_instances,
-                |model| &model.alpha_clipped_double_sided_primitives,
-                &model_bind_groups.alpha_clipped_double_sided,
-                &heads,
-                &hands,
-            );
-        }
-
-        {
-            render_pass.set_pipeline(&pipelines.skybox);
-            render_pass.set_bind_group(1, &skybox_uniform_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
+
+            drop(render_pass);
         }
 
-        {
-            render_pass.set_pipeline(&pipelines.ui);
-
-            let ui_plane_model = ui_plane_model.model.as_ref().unwrap();
-
-            render_pass.set_bind_group(1, ui_texture_bind_group, &[]);
-            render_pass.draw_indexed(
-                ui_plane_model.index_buffer_range.clone(),
-                0,
-                ui_plane_instance_range,
-            );
-        }
-
-        drop(render_pass);
-
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("tonemap render pass"),
-            color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                },
-            }],
-            depth_stencil_attachment: None,
-        });
-
-        render_pass.set_pipeline(&pipelines.tonemap);
-
-        render_pass.set_bind_group(0, tonemap_bind_group, &[]);
-
-        render_pass.draw(0..3, 0..1);
-
-        drop(render_pass);
-
-        queue.submit(std::iter::once(encoder.finish()));
+        queue.submit(std::iter::once(command_encoder.finish()));
     });
 
     Ok(())
@@ -1564,7 +1481,7 @@ struct HeadOrHandsRenderingData<'a> {
     bind_groups: &'a [std::cell::Ref<'a, wgpu::BindGroup>],
 }
 
-fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
+fn render_all_model_primitives<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
     render_pass: &mut wgpu::RenderPass<'a>,
     models: &'a slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>,
     model_instances: &[Range<u32>],
@@ -1603,6 +1520,187 @@ fn render_all<'a, F: Fn(&'a assets::Model) -> &'a [ModelPrimitive]>(
             primitive.index_buffer_range.clone(),
             0,
             hands.instance_range.clone(),
+        );
+    }
+}
+
+struct UiData<'a> {
+    plane_instance_range: Range<u32>,
+    plane_model: &'a assets::Model,
+    texture_bind_group: &'a wgpu::BindGroup,
+}
+
+fn render_everything<'a>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    pipelines: &'a Pipelines,
+    models: &'a slotmap::SlotMap<slotmap::DefaultKey, InstancedModel>,
+    model_instances: &[Range<u32>],
+    model_bind_groups: &'a ModelBindGroups,
+    index_buffer: &'a IndexBuffer,
+    vertex_buffers: &'a VertexBuffers,
+    instance_buffer: &'a InstanceBuffer,
+    uniform_bind_group: &'a wgpu::BindGroup,
+    hands: &'a HeadOrHandsRenderingData,
+    heads: &'a HeadOrHandsRenderingData,
+    heads_mirrored: &'a HeadOrHandsRenderingData,
+    mirror_model: Option<(&InstancedModel, Range<u32>, &'a wgpu::BindGroup)>,
+    ui_data: &UiData<'a>,
+    skybox_uniform_bind_group: &'a wgpu::BindGroup,
+    render_skybox: bool,
+) {
+    render_pass.set_bind_group(0, uniform_bind_group, &[]);
+
+    render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
+    render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
+    render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
+    render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
+    render_pass.set_vertex_buffer(3, instance_buffer.buffer.slice(..));
+
+    if let Some((mirror_model, mirror_model_instances, mirror_uniform_bind_group)) = mirror_model {
+        let mirror_model = mirror_model.model.as_ref().unwrap();
+
+        render_pass.set_stencil_reference(1);
+
+        render_pass.set_pipeline(&pipelines.stencil_write);
+
+        render_pass.draw_indexed(
+            mirror_model.index_buffer_range.clone(),
+            0,
+            mirror_model_instances.clone(),
+        );
+
+        render_pass.set_bind_group(2, mirror_uniform_bind_group, &[]);
+
+        {
+            render_pass.set_pipeline(&pipelines.pbr.opaque_mirrored);
+
+            render_all_model_primitives(
+                render_pass,
+                models,
+                model_instances,
+                |model| &model.opaque_primitives,
+                &model_bind_groups.opaque,
+                heads_mirrored,
+                hands,
+            );
+
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque_mirrored);
+
+            render_all_model_primitives(
+                render_pass,
+                models,
+                model_instances,
+                |model| &model.opaque_double_sided_primitives,
+                &model_bind_groups.opaque_double_sided,
+                heads_mirrored,
+                hands,
+            );
+
+            render_pass.set_pipeline(&pipelines.pbr.alpha_clipped_mirrored);
+
+            render_all_model_primitives(
+                render_pass,
+                models,
+                model_instances,
+                |model| &model.alpha_clipped_primitives,
+                &model_bind_groups.alpha_clipped,
+                heads_mirrored,
+                hands,
+            );
+
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped_mirrored);
+
+            render_all_model_primitives(
+                render_pass,
+                models,
+                model_instances,
+                |model| &model.alpha_clipped_double_sided_primitives,
+                &model_bind_groups.alpha_clipped_double_sided,
+                heads_mirrored,
+                hands,
+            );
+        }
+
+        if render_skybox {
+            render_pass.set_pipeline(&pipelines.skybox_mirrored);
+            render_pass.set_bind_group(1, skybox_uniform_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        {
+            render_pass.set_pipeline(&pipelines.set_depth);
+            render_pass.draw_indexed(
+                mirror_model.index_buffer_range.clone(),
+                0,
+                mirror_model_instances,
+            );
+        }
+    }
+
+    {
+        render_pass.set_pipeline(&pipelines.pbr.opaque);
+
+        render_all_model_primitives(
+            render_pass,
+            models,
+            model_instances,
+            |model| &model.opaque_primitives,
+            &model_bind_groups.opaque,
+            heads,
+            hands,
+        );
+
+        render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
+
+        render_all_model_primitives(
+            render_pass,
+            models,
+            model_instances,
+            |model| &model.opaque_double_sided_primitives,
+            &model_bind_groups.opaque_double_sided,
+            heads,
+            hands,
+        );
+
+        render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
+
+        render_all_model_primitives(
+            render_pass,
+            models,
+            model_instances,
+            |model| &model.alpha_clipped_primitives,
+            &model_bind_groups.alpha_clipped,
+            heads,
+            hands,
+        );
+
+        render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
+
+        render_all_model_primitives(
+            render_pass,
+            models,
+            model_instances,
+            |model| &model.alpha_clipped_double_sided_primitives,
+            &model_bind_groups.alpha_clipped_double_sided,
+            heads,
+            hands,
+        );
+    }
+
+    if render_skybox {
+        render_pass.set_pipeline(&pipelines.skybox);
+        render_pass.set_bind_group(1, skybox_uniform_bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+    }
+
+    {
+        render_pass.set_pipeline(&pipelines.ui);
+
+        render_pass.set_bind_group(1, ui_data.texture_bind_group, &[]);
+        render_pass.draw_indexed(
+            ui_data.plane_model.index_buffer_range.clone(),
+            0,
+            ui_data.plane_instance_range.clone(),
         );
     }
 }
@@ -1712,4 +1810,62 @@ fn quat_to_dom_point(quat: glam::Quat) -> web_sys::DomPointInit {
         .w(quat.w as f64);
 
     dom_point
+}
+
+enum BorrowedOrOwnedFramebuffer<'a> {
+    Owned(assets::Texture),
+    Borrowed(&'a assets::Texture),
+}
+
+impl<'a> BorrowedOrOwnedFramebuffer<'a> {
+    fn get(&'a self) -> &'a assets::Texture {
+        match self {
+            Self::Owned(texture) => texture,
+            Self::Borrowed(texture) => texture,
+        }
+    }
+}
+
+fn create_view_from_device_framebuffer(
+    device: &wgpu::Device,
+    framebuffer: web_sys::WebGlFramebuffer,
+    base_layer: &web_sys::XrWebGlLayer,
+    format: wgpu::TextureFormat,
+    label: &'static str,
+    extra_usages: wgpu::TextureUsages,
+) -> assets::Texture {
+    assets::Texture::new(unsafe {
+        device.create_texture_from_hal::<wgpu_hal::gles::Api>(
+            wgpu_hal::gles::Texture {
+                inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
+                mip_level_count: 1,
+                array_layer_count: 1,
+                format,
+                format_desc: wgpu_hal::gles::TextureFormatDesc {
+                    internal: glow::RGBA,
+                    external: glow::RGBA,
+                    data_type: glow::UNSIGNED_BYTE,
+                },
+                copy_size: wgpu_hal::CopyExtent {
+                    width: base_layer.framebuffer_width(),
+                    height: base_layer.framebuffer_height(),
+                    depth: 1,
+                },
+                is_cubemap: false,
+            },
+            &wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: base_layer.framebuffer_width(),
+                    height: base_layer.framebuffer_height(),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usages,
+            },
+        )
+    })
 }

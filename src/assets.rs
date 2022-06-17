@@ -1451,7 +1451,7 @@ pub(crate) struct Texture {
 }
 
 impl Texture {
-    fn new(texture: wgpu::Texture) -> Self {
+    pub(crate) fn new(texture: wgpu::Texture) -> Self {
         Self {
             view: texture.create_view(&Default::default()),
             texture,

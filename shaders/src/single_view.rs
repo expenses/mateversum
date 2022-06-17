@@ -153,16 +153,18 @@ pub fn vertex_mirrored(
 #[spirv(vertex)]
 pub fn vertex_skybox(
     #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
     ray: &mut Vec3,
 ) {
-    super::vertex_skybox(vertex_index, skybox_uniforms, builtin_pos, 0, ray);
+    super::vertex_skybox(vertex_index, uniforms, skybox_uniforms, builtin_pos, 0, ray);
 }
 
 #[spirv(vertex)]
 pub fn vertex_skybox_mirrored(
     #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
     #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
@@ -170,6 +172,7 @@ pub fn vertex_skybox_mirrored(
 ) {
     super::vertex_skybox_mirrored(
         vertex_index,
+        uniforms,
         skybox_uniforms,
         mirror_uniforms,
         builtin_pos,
@@ -181,8 +184,9 @@ pub fn vertex_skybox_mirrored(
 #[spirv(fragment)]
 pub fn tonemap(
     uv: Vec2,
-    #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
-    #[spirv(descriptor_set = 0, binding = 1)] texture: &Image!(2D, type=f32, sampled),
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] _uniforms: &Uniforms,
+    #[spirv(descriptor_set = 1, binding = 0)] sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 1)] texture: &Image!(2D, type=f32, sampled),
     output: &mut Vec4,
 ) {
     let sample: Vec4 = texture.sample(*sampler, uv);

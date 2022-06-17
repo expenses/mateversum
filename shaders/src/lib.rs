@@ -43,6 +43,10 @@ pub fn vertex(
     *out_position = position;
     *out_normal = instance_rotation * normal;
     *out_uv = uv;
+
+    if uniforms.render_direct_to_framebuffer != 0 {
+        builtin_pos.y = -builtin_pos.y;
+    }
 }
 
 struct TextureSampler<'a> {
@@ -183,7 +187,13 @@ pub fn fragment(
         },
     );
 
-    *output = (diffuse_output + specular_output + material_params.emission).extend(1.0);
+    let mut combined_output = diffuse_output + specular_output + material_params.emission;
+
+    if uniforms.inline_tonemapping != 0 {
+        combined_output = tonemapping(combined_output);
+    }
+
+    *output = combined_output.extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -274,7 +284,13 @@ pub fn fragment_alpha_clipped(
         },
     );
 
-    *output = (diffuse_output + specular_output + material_params.emission).extend(1.0);
+    let mut combined_output = diffuse_output + specular_output + material_params.emission;
+
+    if uniforms.inline_tonemapping != 0 {
+        combined_output = tonemapping(combined_output);
+    }
+
+    *output = combined_output.extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -282,11 +298,20 @@ pub fn fragment_ui(
     _position: Vec3,
     _normal: Vec3,
     uv: Vec2,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
     #[spirv(descriptor_set = 1, binding = 0)] texture: &SampledImage,
     output: &mut Vec4,
 ) {
-    *output = TextureSampler::new(texture, *sampler, uv).sample();
+    let sample = TextureSampler::new(texture, *sampler, uv).sample();
+
+    let mut colour_output = sample.truncate();
+
+    if uniforms.inline_tonemapping != 0 {
+        colour_output = tonemapping(colour_output);
+    }
+
+    *output = colour_output.extend(sample.w);
 }
 
 fn linear_to_srgb_approx(color_linear: Vec3) -> Vec3 {
@@ -389,6 +414,10 @@ pub fn vertex_mirrored(
     *out_position = position;
     *out_normal = normal;
     *out_uv = uv;
+
+    if uniforms.render_direct_to_framebuffer != 0 {
+        builtin_pos.y = -builtin_pos.y;
+    }
 }
 
 // Used for testing stencil writes.
@@ -411,11 +440,17 @@ fn aces_filmic(x: Vec3) -> Vec3 {
     saturate((x * (a * x + b)) / (x * (c * x + d) + e))
 }
 
+fn tonemapping(hdr_linear: Vec3) -> Vec3 {
+    let tonemapped_linear = aces_filmic(hdr_linear);
+    linear_to_srgb_approx(tonemapped_linear)
+}
+
 #[spirv(fragment)]
 pub fn tonemap(
     uv: Vec2,
-    #[spirv(descriptor_set = 0, binding = 0)] sampler: &Sampler,
-    #[spirv(descriptor_set = 0, binding = 1)] texture: &Image!(2D, type=f32, sampled, arrayed),
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
+    #[spirv(descriptor_set = 1, binding = 0)] sampler: &Sampler,
+    #[spirv(descriptor_set = 1, binding = 1)] texture: &Image!(2D, type=f32, sampled, arrayed),
     output: &mut Vec4,
 ) {
     let (array_index, uv) = if uv.x > 0.5 {
@@ -426,14 +461,19 @@ pub fn tonemap(
 
     let sample: Vec4 = texture.sample(*sampler, uv.extend(array_index as f32));
 
-    let linear = aces_filmic(sample.truncate());
+    let mut colour_output = sample.truncate();
 
-    *output = linear_to_srgb_approx(linear).extend(1.0)
+    if uniforms.inline_tonemapping == 0 {
+        colour_output = tonemapping(colour_output);
+    }
+
+    *output = colour_output.extend(1.0)
 }
 
 #[spirv(vertex)]
 pub fn vertex_skybox(
     #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
     #[spirv(view_index)] view_index: i32,
@@ -452,11 +492,16 @@ pub fn vertex_skybox(
     *ray = glam::Quat::from_vec4(skybox_uniforms.view_inverse(view_index)) * unprojected.truncate();
 
     *builtin_pos = pos;
+
+    if uniforms.render_direct_to_framebuffer != 0 {
+        builtin_pos.y = -builtin_pos.y;
+    }
 }
 
 #[spirv(vertex)]
 pub fn vertex_skybox_mirrored(
     #[spirv(vertex_index)] vertex_index: i32,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 1, binding = 0, uniform)] skybox_uniforms: &SkyboxUniforms,
     #[spirv(descriptor_set = 2, binding = 0, uniform)] mirror_uniforms: &MirrorUniforms,
     #[spirv(position)] builtin_pos: &mut Vec4,
@@ -479,16 +524,27 @@ pub fn vertex_skybox_mirrored(
     );
 
     *builtin_pos = pos;
+
+    if uniforms.render_direct_to_framebuffer != 0 {
+        builtin_pos.y = -builtin_pos.y;
+    }
 }
 
 #[spirv(fragment)]
 pub fn fragment_skybox(
     ray: Vec3,
+    #[spirv(descriptor_set = 0, binding = 0, uniform)] uniforms: &Uniforms,
     #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
     #[spirv(descriptor_set = 0, binding = 4)] specular_ibl_cubemap: &Image!(cube, type=f32, sampled),
     output: &mut Vec4,
 ) {
     let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, 0.0);
 
-    *output = sample.truncate().extend(1.0);
+    let mut skybox_output = sample.truncate();
+
+    if uniforms.inline_tonemapping != 0 {
+        skybox_output = tonemapping(skybox_output);
+    }
+
+    *output = skybox_output.extend(1.0);
 }
