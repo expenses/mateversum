@@ -381,7 +381,11 @@ impl Pipelines {
                 })
             }),
             entry_point: &format!("{}fragment_alpha_clipped", prefix),
-            targets: &[wgpu::TextureFormat::Rgba16Float.into()],
+            targets: &[wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                write_mask: wgpu::ColorWrites::ALL,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING)
+            }],
         };
 
         Self {
