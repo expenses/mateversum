@@ -200,7 +200,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let mut layer_init = web_sys::XrWebGlLayerInit::new();
 
     layer_init
-        .alpha(false)
+        // Setting this crashes the Oculus Quest 2. No idea why. I spent 2+ hours on a git bisect to figure this out.
+        // .alpha(false)
         .depth(render_direct_to_framebuffer)
         .stencil(render_direct_to_framebuffer);
 
