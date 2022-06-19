@@ -83,12 +83,17 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         .parse("sponza_with_mirror.json")
         .unwrap();
 
+    let mut autostart = false;
+
     for (key, value) in href.query_pairs() {
         if key == "world" {
             world_url = url::Url::options()
                 .base_url(Some(&href))
                 .parse(&value)
                 .unwrap();
+        }
+        if key == "autostart" {
+            autostart = true;
         }
     }
 
@@ -113,9 +118,14 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
 
-    let mode = futures::select! {
-        _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
-        _ = Box::pin(start_ar_future.fuse()) => web_sys::XrSessionMode::ImmersiveAr,
+    // if query param autostart, jump straight into VR mode
+    let mode = if autostart {
+        web_sys::XrSessionMode::ImmersiveVr
+    } else {
+        futures::select! {
+            _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
+            _ = Box::pin(start_ar_future.fuse()) => web_sys::XrSessionMode::ImmersiveAr,
+        }
     };
 
     let reference_space_type = match mode {
