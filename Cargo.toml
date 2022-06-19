@@ -11,7 +11,7 @@ console_error_panic_hook = "0.1.7"
 console_log = "0.2.0"
 log = "0.4.17"
 wasm-bindgen-futures = "0.4.30"
-wgpu = { version = "0.12.0", features = ["webgl", "spirv"] }
+wgpu = { version = "0.12.0", features = ["spirv"] }
 futures = { version = "0.3.21", default-features = false }
 gltf = {  git = "https://github.com/expenses/gltf", branch = "third-party-extensions", features = ["KHR_materials_unlit"], default-features = false }
 gltf-helpers = { path = "gltf-helpers" }
@@ -103,6 +103,11 @@ features = [
   'Gamepad',
   'Location'
 ]
+
+[features]
+default = ["webgl", "thread_pool"]
+thread_pool = []
+webgl = ["wgpu/webgl"]
 
 [patch.crates-io]
 web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }

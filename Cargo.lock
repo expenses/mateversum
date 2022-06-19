@@ -326,7 +326,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.18.1"
-source = "git+https://github.com/expenses/egui?branch=fixes#0985e240b72b06036298d3a391baf19874e57ec3"
+source = "git+https://github.com/expenses/egui?branch=fixes#f8b00920b8b166994939c57e98c172c942c7a679"
 dependencies = [
  "ahash",
  "epaint",
@@ -336,11 +336,12 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.18.0"
-source = "git+https://github.com/expenses/egui?branch=fixes#0985e240b72b06036298d3a391baf19874e57ec3"
+source = "git+https://github.com/expenses/egui?branch=fixes#f8b00920b8b166994939c57e98c172c942c7a679"
 dependencies = [
  "bytemuck",
  "egui",
  "tracing",
+ "type-map",
  "wgpu",
 ]
 
@@ -356,7 +357,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.18.0"
-source = "git+https://github.com/expenses/egui?branch=fixes#0985e240b72b06036298d3a391baf19874e57ec3"
+source = "git+https://github.com/expenses/egui?branch=fixes#f8b00920b8b166994939c57e98c172c942c7a679"
 dependencies = [
  "bytemuck",
 ]
@@ -364,7 +365,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.18.1"
-source = "git+https://github.com/expenses/egui?branch=fixes#0985e240b72b06036298d3a391baf19874e57ec3"
+source = "git+https://github.com/expenses/egui?branch=fixes#f8b00920b8b166994939c57e98c172c942c7a679"
 dependencies = [
  "ab_glyph",
  "ahash",
@@ -1291,6 +1292,15 @@ name = "ttf-parser"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42d4b50cba812f0f04f0707bb6a0eaa5fae4ae05d90fc2a377998d2f21e77a1c"
+
+[[package]]
+name = "type-map"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb68604048ff8fa93347f02441e4487594adc20bb8a084f9e564d2b827a0a9f"
+dependencies = [
+ "rustc-hash",
+]
 
 [[package]]
 name = "unicode-bidi"

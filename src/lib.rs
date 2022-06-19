@@ -64,6 +64,7 @@ pub fn main() {
 
 #[wasm_bindgen]
 pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
+    #[cfg(feature = "thread_pool")]
     let thread_pool = wasm_futures_executor::ThreadPool::max_threads().await?;
 
     let href = web_sys::window().unwrap().location().href()?;
@@ -108,8 +109,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let start_ar_future = button_click_future(&ar_button);
 
     let canvas = js_helpers::Canvas::default();
-    let webgl2_context =
-        canvas.create_webgl2_context(js_helpers::ContextCreationOptions { stencil: true });
 
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
@@ -155,25 +154,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         .await?
         .into();
 
-    let mut layer_init = web_sys::XrWebGlLayerInit::new();
-
-    layer_init
-        .alpha(false)
-        .depth(render_direct_to_framebuffer)
-        .stencil(render_direct_to_framebuffer);
-
-    let xr_gl_layer = web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(
-        &xr_session,
-        &webgl2_context,
-        &layer_init,
-    )?;
-
-    let mut render_state_init = web_sys::XrRenderStateInit::new();
-    render_state_init
-        .depth_near(0.001)
-        .base_layer(Some(&xr_gl_layer));
-    xr_session.update_render_state_with_state(&render_state_init);
-
     let reference_space: web_sys::XrReferenceSpace = wasm_bindgen_futures::JsFuture::from(
         xr_session.request_reference_space(reference_space_type),
     )
@@ -194,7 +174,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let adapter_info = adapter.get_info();
     log::info!(
-        "Using {} with the {:?} backend. Downlevel capabilities: {:?}",
+        "Using '{}' with the {:?} backend. Downlevel capabilities: {:?}",
         adapter_info.name,
         adapter_info.backend,
         adapter.get_downlevel_capabilities()
@@ -216,6 +196,28 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
 
     let device = Rc::new(device);
     let queue = Rc::new(queue);
+
+    let mut layer_init = web_sys::XrWebGlLayerInit::new();
+
+    layer_init
+        .alpha(false)
+        .depth(render_direct_to_framebuffer)
+        .stencil(render_direct_to_framebuffer);
+
+    let webgl2_context =
+        canvas.create_webgl2_context(js_helpers::ContextCreationOptions { stencil: true });
+
+    let xr_gl_layer = web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(
+        &xr_session,
+        &webgl2_context,
+        &layer_init,
+    )?;
+
+    let mut render_state_init = web_sys::XrRenderStateInit::new();
+    render_state_init
+        .depth_near(0.001)
+        .base_layer(Some(&xr_gl_layer));
+    xr_session.update_render_state_with_state(&render_state_init);
 
     let fetched_images = FetchedImages::default();
 
@@ -410,6 +412,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         pipeline_cache: Default::default(),
         sampler: Rc::clone(&linear_sampler),
         performance_settings,
+        #[cfg(feature = "thread_pool")]
         thread_pool,
         request_client,
         bc6h_supported: adapter
@@ -1835,6 +1838,10 @@ fn create_view_from_device_framebuffer(
     label: &'static str,
     extra_usages: wgpu::TextureUsages,
 ) -> assets::Texture {
+    #[cfg(not(feature = "webgl"))]
+    panic!();
+
+    #[cfg(feature = "webgl")]
     assets::Texture::new(unsafe {
         device.create_texture_from_hal::<wgpu_hal::gles::Api>(
             wgpu_hal::gles::Texture {

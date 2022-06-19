@@ -31,6 +31,7 @@ pub(crate) struct ModelLoadContext {
     pub(crate) pipeline_cache: Rc<ResourceCache<PipelineData>>,
     pub(crate) sampler: Rc<wgpu::Sampler>,
     pub(crate) performance_settings: PerformanceSettings,
+    #[cfg(feature = "thread_pool")]
     pub(crate) thread_pool: wasm_futures_executor::ThreadPool,
     pub(crate) request_client: RequestClient,
     pub(crate) bc6h_supported: bool,
@@ -928,6 +929,7 @@ pub(crate) async fn load_ktx2_async<F: Fn(u32) + 'static>(
             i as u32,
             level_index,
             header,
+            #[cfg(feature = "thread_pool")]
             &context.thread_pool,
             format,
             &context.request_client,
@@ -962,6 +964,7 @@ pub(crate) async fn load_ktx2_async<F: Fn(u32) + 'static>(
                     i as u32,
                     level_index,
                     header,
+                    #[cfg(feature = "thread_pool")]
                     &context.thread_pool,
                     format,
                     &context.request_client,
@@ -990,7 +993,7 @@ async fn decompress_and_transcode(
     level: u32,
     level_index: ktx2::LevelIndex,
     header: ktx2::Header,
-    thread_pool: &wasm_futures_executor::ThreadPool,
+    #[cfg(feature = "thread_pool")] thread_pool: &wasm_futures_executor::ThreadPool,
     format: Format,
     client: &RequestClient,
 ) -> anyhow::Result<Vec<u8>> {
@@ -1006,40 +1009,43 @@ async fn decompress_and_transcode(
         )
         .await?;
 
-    thread_pool
-        .spawn(async move {
-            let decompressed = match header.supercompression_scheme {
-                Some(ktx2::SupercompressionScheme::Zstandard) => {
-                    zstd::bulk::decompress(&bytes, level_index.uncompressed_byte_length as usize)?
-                }
-                Some(other) => panic!("Unsupported: {:?}", other),
-                None => bytes,
-            };
+    let future = async move {
+        let decompressed = match header.supercompression_scheme {
+            Some(ktx2::SupercompressionScheme::Zstandard) => {
+                zstd::bulk::decompress(&bytes, level_index.uncompressed_byte_length as usize)?
+            }
+            Some(other) => panic!("Unsupported: {:?}", other),
+            None => bytes,
+        };
 
-            let slice_width = header.pixel_width >> level;
-            let slice_height = header.pixel_height >> level;
+        let slice_width = header.pixel_width >> level;
+        let slice_height = header.pixel_height >> level;
 
-            let (block_width_pixels, block_height_pixels) = (4, 4);
+        let (block_width_pixels, block_height_pixels) = (4, 4);
 
-            let slice_parameters = basis_universal::SliceParametersUastc {
-                num_blocks_x: ((slice_width + block_width_pixels - 1) / block_width_pixels).max(1),
-                num_blocks_y: ((slice_height + block_height_pixels - 1) / block_height_pixels)
-                    .max(1),
-                has_alpha: false,
-                original_width: slice_width,
-                original_height: slice_height,
-            };
+        let slice_parameters = basis_universal::SliceParametersUastc {
+            num_blocks_x: ((slice_width + block_width_pixels - 1) / block_width_pixels).max(1),
+            num_blocks_y: ((slice_height + block_height_pixels - 1) / block_height_pixels).max(1),
+            has_alpha: false,
+            original_width: slice_width,
+            original_height: slice_height,
+        };
 
-            transcoder
-                .transcode_slice(
-                    &decompressed,
-                    slice_parameters,
-                    basis_universal::DecodeFlags::HIGH_QUALITY,
-                    format.as_transcoder_block_format(),
-                )
-                .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
-        })
-        .await?
+        transcoder
+            .transcode_slice(
+                &decompressed,
+                slice_parameters,
+                basis_universal::DecodeFlags::HIGH_QUALITY,
+                format.as_transcoder_block_format(),
+            )
+            .map_err(|err| anyhow::anyhow!("Transcoder error: {:?}", err))
+    };
+
+    #[cfg(feature = "thread_pool")]
+    return thread_pool.spawn(future).await?;
+
+    #[cfg(not(feature = "thread_pool"))]
+    future.await
 }
 
 pub(crate) async fn load_ktx2_cubemap(
