@@ -408,6 +408,17 @@ pub(crate) async fn load_gltf_from_bytes(
                 (_, true) => &mut alpha_clipped_double_sided_primitives,
             };
 
+            let reader = primitive.reader(|buffer| match buffer.source() {
+                gltf::buffer::Source::Bin => Some(gltf.blob.as_ref().unwrap()),
+                gltf::buffer::Source::Uri(_) => {
+                    buffers.map.get(&buffer.index()).map(|vec| &vec[..])
+                }
+            });
+
+            // Workaround for some exporters (Scaniverse) exporting scanned models that are meant to be
+            // rendered unlit but don't set the material flag.
+            let unlit = material.unlit() || reader.read_normals().is_none();
+
             // We can't use `or_insert_with` here as that uses a closure and closures aren't async.
             let staging_primitive = match primitive_map.entry(material.index()) {
                 std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
@@ -430,7 +441,7 @@ pub(crate) async fn load_gltf_from_bytes(
                                             emissive_factor: material.emissive_factor().into(),
                                             metallic_factor: pbr.metallic_factor(),
                                             roughness_factor: pbr.roughness_factor(),
-                                            is_unlit: material.unlit() as u32,
+                                            is_unlit: unlit as u32,
                                         }
                                         .as_std140(),
                                     ),
@@ -442,13 +453,6 @@ pub(crate) async fn load_gltf_from_bytes(
                 }
             };
 
-            let reader = primitive.reader(|buffer| match buffer.source() {
-                gltf::buffer::Source::Bin => Some(gltf.blob.as_ref().unwrap()),
-                gltf::buffer::Source::Uri(_) => {
-                    buffers.map.get(&buffer.index()).map(|vec| &vec[..])
-                }
-            });
-
             staging_primitive.indices.extend(
                 reader
                     .read_indices()
@@ -456,18 +460,26 @@ pub(crate) async fn load_gltf_from_bytes(
                     .into_u32()
                     .map(|index| staging_primitive.positions.len() as u32 + index),
             );
+
+            let start_positions = staging_primitive.positions.len();
+
             staging_primitive.positions.extend(
                 reader
                     .read_positions()
                     .unwrap()
                     .map(|pos| transform * Vec3::from(pos)),
             );
-            staging_primitive.normals.extend(
-                reader
-                    .read_normals()
-                    .unwrap()
-                    .map(|rot| transform.rotation * Vec3::from(rot)),
-            );
+
+            let num_positions = staging_primitive.positions.len() - start_positions;
+
+            match reader.read_normals() {
+                Some(normals) => staging_primitive
+                    .normals
+                    .extend(normals.map(|normal| transform.rotation * Vec3::from(normal))),
+                None => staging_primitive
+                    .normals
+                    .extend(std::iter::repeat(Vec3::ZERO).take(num_positions)),
+            }
             staging_primitive.uvs.extend(
                 reader
                     .read_tex_coords(0)
