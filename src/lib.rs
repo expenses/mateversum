@@ -877,7 +877,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     depth_or_array_layers: num_views,
                 },
                 mip_level_count: 1,
-                sample_count: 1,
+                sample_count: SAMPLE_COUNT,
                 dimension: wgpu::TextureDimension::D2,
                 format: if inline_tonemapping {
                     wgpu::TextureFormat::Rgba8Unorm
@@ -940,7 +940,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                         depth_or_array_layers: num_views,
                     },
                     mip_level_count: 1,
-                    sample_count: 1,
+                    sample_count: SAMPLE_COUNT,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Depth24PlusStencil8,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1831,6 +1831,8 @@ impl<'a> BorrowedOrOwnedFramebuffer<'a> {
     }
 }
 
+const SAMPLE_COUNT: u32 = 4;
+
 fn create_view_from_device_framebuffer(
     device: &wgpu::Device,
     framebuffer: web_sys::WebGlFramebuffer,
@@ -1861,6 +1863,7 @@ fn create_view_from_device_framebuffer(
                     depth: 1,
                 },
                 is_cubemap: false,
+                sample_count: SAMPLE_COUNT
             },
             &wgpu::TextureDescriptor {
                 label: Some(label),
@@ -1870,7 +1873,7 @@ fn create_view_from_device_framebuffer(
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
-                sample_count: 1,
+                sample_count: SAMPLE_COUNT,
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usages,

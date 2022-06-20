@@ -49,9 +49,9 @@ checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
 name = "anyhow"
-version = "1.0.57"
+version = "1.0.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08f9b8508dccb7687a1d6c4ce66b2b0ecef467c94667de27d8d7fe1f8d2a9cdc"
+checksum = "bb07d2053ccdbe10e2af2995a2f116c1330396493dc1269f6a91d0ae82e19704"
 
 [[package]]
 name = "arrayvec"
@@ -518,7 +518,6 @@ dependencies = [
 [[package]]
 name = "glow"
 version = "0.11.2"
-source = "git+https://github.com/expenses/glow?branch=webxr#60dbcbb607ca3bc771bf78829cf7efab5e8262df"
 dependencies = [
  "js-sys",
  "slotmap",
@@ -598,7 +597,7 @@ checksum = "a538f217be4d405ff4719a283ca68323cc2384003eca5baaa87501e821c81dda"
 dependencies = [
  "bitflags",
  "gpu-descriptor-types",
- "hashbrown",
+ "hashbrown 0.11.2",
 ]
 
 [[package]]
@@ -618,6 +617,12 @@ checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
 dependencies = [
  "ahash",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db0d4cf898abf0081f964436dc980e96670a0f36863e4b83aaacdb65c9d7ccc3"
 
 [[package]]
 name = "hexf-parse"
@@ -654,12 +659,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.8.2"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6012d540c5baa3589337a98ce73408de9b5a25ec9fc2c6fd6be8f0d39e0ca5a"
+checksum = "6c6392766afd7964e2531940894cffe4bd8d7d17dbc3c1c4857040fd4b33bdb3"
 dependencies = [
  "autocfg",
- "hashbrown",
+ "hashbrown 0.12.1",
 ]
 
 [[package]]
@@ -697,8 +702,8 @@ checksum = "9478aa10f73e7528198d75109c8be5cd7d15fb530238040148d5f9a22d4c5b3b"
 
 [[package]]
 name = "js-sys"
-version = "0.3.57"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.3.58"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 dependencies = [
  "wasm-bindgen",
 ]
@@ -1055,9 +1060,9 @@ checksum = "2f61dcf0b917cd75d4521d7343d1ffff3d1583054133c9b5cbea3375c703c40d"
 
 [[package]]
 name = "quote"
-version = "1.0.18"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1feb54ed693b93a84e14094943b84b7c4eae204c512b7ccb95ab0c66d278ad1"
+checksum = "f53dc8cf16a769a6f677e09e7ff2cd4be1ea0f48754aac39520536962011de0d"
 dependencies = [
  "proc-macro2",
 ]
@@ -1193,9 +1198,9 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "syn"
-version = "1.0.96"
+version = "1.0.98"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0748dd251e24453cb8717f0354206b91557e4ec8703673a4b30208f2abaf1ebf"
+checksum = "c50aef8a904de4c23c788f104b7dddc7d6f79c647c7c8ce4cc8f73eb0ca773dd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1289,9 +1294,9 @@ dependencies = [
 
 [[package]]
 name = "ttf-parser"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42d4b50cba812f0f04f0707bb6a0eaa5fae4ae05d90fc2a377998d2f21e77a1c"
+checksum = "7b3e06c9b9d80ed6b745c7159c40b311ad2916abb34a49e9be2653b90db0d8dd"
 
 [[package]]
 name = "type-map"
@@ -1368,8 +1373,8 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.2.81"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 dependencies = [
  "cfg-if",
  "serde",
@@ -1379,8 +1384,8 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-backend"
-version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.2.81"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 dependencies = [
  "bumpalo",
  "lazy_static",
@@ -1405,8 +1410,8 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.2.81"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -1414,8 +1419,8 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.2.81"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1426,8 +1431,8 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.80"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.2.81"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 
 [[package]]
 name = "wasm-futures-executor"
@@ -1446,8 +1451,8 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.57"
-source = "git+https://github.com/expenses/wasm-bindgen?branch=gamepad-without-webgpu-update#e476a56cfc36506048edfd11a3d1a048a99ae75f"
+version = "0.3.58"
+source = "git+https://github.com/expenses/wasm-bindgen?branch=no-webgpu-update-rebase#2ebcf17c3fe94bab891062b35b609c4734f55f85"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -1456,7 +1461,6 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#474253a7222257d387b4c5e1bfc7ef5fff921707"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -1476,7 +1480,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#474253a7222257d387b4c5e1bfc7ef5fff921707"
 dependencies = [
  "arrayvec",
  "bit-vec",
@@ -1500,7 +1503,6 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#474253a7222257d387b4c5e1bfc7ef5fff921707"
 dependencies = [
  "android-properties",
  "arrayvec",
@@ -1538,7 +1540,6 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/expenses/wgpu?branch=webxr-more-extensions#474253a7222257d387b4c5e1bfc7ef5fff921707"
 dependencies = [
  "bitflags",
 ]

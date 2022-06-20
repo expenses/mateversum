@@ -170,8 +170,9 @@ pub fn fragment(
         material_params.base,
         lut_values,
         |normal| {
-            let sample: Vec4 = diffuse_ibl_cubemap.sample_by_lod(*sampler, normal, 0.0);
-            sample.truncate()
+            Vec3::splat(0.5)
+            //let sample: Vec4 = diffuse_ibl_cubemap.sample_by_lod(*sampler, normal, 0.0);
+            //sample.truncate()
         },
     );
 
@@ -267,8 +268,9 @@ pub fn fragment_alpha_clipped(
         material_params.base,
         lut_values,
         |normal| {
-            let sample: Vec4 = diffuse_ibl_cubemap.sample_by_lod(*sampler, normal, 0.0);
-            sample.truncate()
+            Vec3::splat(0.5)
+            //let sample: Vec4 = diffuse_ibl_cubemap.sample_by_lod(*sampler, normal, 0.0);
+            //sample.truncate()
         },
     );
 

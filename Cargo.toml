@@ -20,7 +20,7 @@ bytemuck = { version = "1.9.1", features = ["derive"] }
 image = { version = "0.24.2", default-features = false, features = ["jpeg", "png"] }
 shared-structs = { path = "shared-structs" }
 glow = "0.11.2"
-wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
+wgpu-hal = "0.12.0"
 base64 = "0.13.0"
 js-sys = "0.3.57"
 url = { version = "2.2.2", features = ["serde"] }
@@ -110,13 +110,13 @@ thread_pool = []
 webgl = ["wgpu/webgl"]
 
 [patch.crates-io]
-web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
-wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
-wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
-js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "gamepad-without-webgpu-update" }
-glow = { git = "https://github.com/expenses/glow", branch = "webxr" }
-wgpu = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
-wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
+web-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "no-webgpu-update-rebase" }
+wasm-bindgen = { git = "https://github.com/expenses/wasm-bindgen", branch = "no-webgpu-update-rebase" }
+wasm-bindgen-shared = { git = "https://github.com/expenses/wasm-bindgen", branch = "no-webgpu-update-rebase" }
+js-sys = { git = "https://github.com/expenses/wasm-bindgen", branch = "no-webgpu-update-rebase" }
+glow = { path = "../../glow" }
+wgpu = { path = "../../wgpu/wgpu" }
+wgpu-hal = { path = "../../wgpu/wgpu-hal" }
 
 [patch.'https://github.com/gfx-rs/naga']
 naga = { git = "https://github.com/expenses/naga", branch = "webxr" }
