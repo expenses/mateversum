@@ -126,7 +126,7 @@ pub(crate) struct Pipelines {
 }
 
 impl Pipelines {
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         shader_cache: &ResourceCache<wgpu::ShaderModule>,
         uniform_bgl: &wgpu::BindGroupLayout,

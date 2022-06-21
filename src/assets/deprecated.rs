@@ -200,7 +200,6 @@ pub(super) fn load_standard_image_format(
             PipelineData {
                 pipeline,
                 bind_group_layout,
-                pipeline_layout,
             }
         },
     );

@@ -1421,14 +1421,14 @@ fn setup_callbacks(
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-pub struct Instance {
-    pub position: Vec3,
-    pub scale: f32,
-    pub rotation: glam::Quat,
+pub(crate) struct Instance {
+    pub(crate) position: Vec3,
+    pub(crate) scale: f32,
+    pub(crate) rotation: glam::Quat,
 }
 
 impl Instance {
-    pub fn new(position: Vec3, scale: f32, rotation: glam::Quat) -> Self {
+    pub(crate) fn new(position: Vec3, scale: f32, rotation: glam::Quat) -> Self {
         Self {
             position,
             scale,
@@ -1436,14 +1436,7 @@ impl Instance {
         }
     }
 
-    pub fn scaled(scale: f32) -> Self {
-        Self {
-            scale,
-            ..Default::default()
-        }
-    }
-
-    pub fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
+    pub(crate) fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
         let rotation = transform.orientation();
 
         let rotation =

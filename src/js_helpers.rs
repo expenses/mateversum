@@ -1,16 +1,17 @@
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-pub struct ContextCreationOptions {
-    pub stencil: bool,
+pub(crate) struct ContextCreationOptions {
+    pub(crate) stencil: bool,
 }
 
-pub struct Canvas {
-    pub inner: web_sys::HtmlCanvasElement,
+pub(crate) struct Canvas {
+    pub(crate) inner: web_sys::HtmlCanvasElement,
     id: u32,
 }
 
 impl Canvas {
-    pub fn new_with_id(id: u32) -> Self {
+    pub(crate) fn new_with_id(id: u32) -> Self {
         let canvas: web_sys::HtmlCanvasElement = web_sys::window()
             .unwrap()
             .document()
@@ -36,7 +37,7 @@ impl Canvas {
         Self { inner: canvas, id }
     }
 
-    pub fn create_webgl2_context(
+    pub(crate) fn create_webgl2_context(
         &self,
         options: ContextCreationOptions,
     ) -> web_sys::WebGl2RenderingContext {
@@ -71,24 +72,26 @@ unsafe impl raw_window_handle::HasRawWindowHandle for Canvas {
     }
 }
 
-pub struct Session {
-    pub inner: web_sys::XrSession,
+pub(crate) fn request_animation_frame(
+    session: &web_sys::XrSession,
+    f: &Closure<dyn FnMut(f64, web_sys::XrFrame)>,
+) -> u32 {
+    // This turns the Closure into a js_sys::Function
+    // See https://rustwasm.github.io/wasm-bindgen/api/wasm_bindgen/closure/struct.Closure.html#casting-a-closure-to-a-js_sysfunction
+    session.request_animation_frame(f.as_ref().unchecked_ref())
+}
+
+pub(crate) struct Session {
+    pub(crate) inner: web_sys::XrSession,
 }
 
 impl Session {
-    pub fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(&self, mut func: F) {
+    pub(crate) fn run_rendering_loop<F: FnMut(f64, web_sys::XrFrame) + 'static>(
+        &self,
+        mut func: F,
+    ) {
         use std::cell::RefCell;
         use std::rc::Rc;
-        use wasm_bindgen::closure::Closure;
-
-        fn request_animation_frame(
-            session: &web_sys::XrSession,
-            f: &Closure<dyn FnMut(f64, web_sys::XrFrame)>,
-        ) -> u32 {
-            // This turns the Closure into a js_sys::Function
-            // See https://rustwasm.github.io/wasm-bindgen/api/wasm_bindgen/closure/struct.Closure.html#casting-a-closure-to-a-js_sysfunction
-            session.request_animation_frame(f.as_ref().unchecked_ref())
-        }
 
         // Wierd hacky closure stuff that I don't understand. Taken from wasm-bindgen.
         // TODO: link source.
@@ -110,7 +113,7 @@ impl Session {
     }
 }
 
-pub fn create_button(text: &str) -> web_sys::HtmlButtonElement {
+pub(crate) fn create_button(text: &str) -> web_sys::HtmlButtonElement {
     let button: web_sys::HtmlButtonElement = web_sys::window()
         .unwrap()
         .document()
@@ -134,14 +137,14 @@ pub fn create_button(text: &str) -> web_sys::HtmlButtonElement {
     button
 }
 
-pub async fn button_click_future(button: &web_sys::HtmlButtonElement) {
+pub(crate) async fn button_click_future(button: &web_sys::HtmlButtonElement) {
     wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _reject| {
         button.set_onclick(Some(&resolve))
     }))
     .await
     .unwrap();
 }
-pub fn append_break() {
+pub(crate) fn append_break() {
     let br: web_sys::HtmlBrElement = web_sys::window()
         .unwrap()
         .document()

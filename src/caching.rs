@@ -1,4 +1,4 @@
-pub struct ResourceCache<T> {
+pub(crate) struct ResourceCache<T> {
     inner: elsa::FrozenMap<&'static str, Box<T>>,
 }
 
@@ -11,7 +11,7 @@ impl<T> Default for ResourceCache<T> {
 }
 
 impl<T> ResourceCache<T> {
-    pub fn get<F: Fn() -> T>(&self, key: &'static str, func: F) -> &T {
+    pub(crate) fn get<F: Fn() -> T>(&self, key: &'static str, func: F) -> &T {
         if let Some(resource) = self.inner.get(key) {
             resource
         } else {
@@ -22,8 +22,7 @@ impl<T> ResourceCache<T> {
     }
 }
 
-pub struct PipelineData {
-    pub pipeline: wgpu::RenderPipeline,
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub pipeline_layout: wgpu::PipelineLayout,
+pub(crate) struct PipelineData {
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
