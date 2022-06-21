@@ -83,17 +83,24 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         .parse("sponza_with_mirror.json")
         .unwrap();
 
-    let mut autostart = false;
+    let mut autostart_mode = None;
 
     for (key, value) in href.query_pairs() {
-        if key == "world" {
-            world_url = url::Url::options()
-                .base_url(Some(&href))
-                .parse(&value)
-                .unwrap();
-        }
-        if key == "autostart" {
-            autostart = true;
+        match &*key {
+            "world" => {
+                world_url = url::Url::options()
+                    .base_url(Some(&href))
+                    .parse(&value)
+                    .unwrap();
+            }
+            "autostart" => match &*value {
+                "vr" => autostart_mode = Some(web_sys::XrSessionMode::ImmersiveVr),
+                "ar" => autostart_mode = Some(web_sys::XrSessionMode::ImmersiveAr),
+                _ => {
+                    log::warn!("autostart mode '{}' not supported.", value)
+                }
+            },
+            _ => {}
         }
     }
 
@@ -118,9 +125,8 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
 
-    // if query param autostart, jump straight into VR mode
-    let mode = if autostart {
-        web_sys::XrSessionMode::ImmersiveVr
+    let mode = if let Some(mode) = autostart_mode {
+        mode
     } else {
         futures::select! {
             _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
