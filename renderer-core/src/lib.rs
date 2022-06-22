@@ -1,3 +1,18 @@
+mod bind_group_layouts;
+mod caching;
+mod instance;
+mod pipelines;
+
+pub use bytemuck;
+pub use crevice;
+pub use glam;
+pub use shared_structs;
+
+pub use bind_group_layouts::BindGroupLayouts;
+pub use caching::ResourceCache;
+pub use instance::Instance;
+pub use pipelines::{PipelineOptions, Pipelines};
+
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -159,6 +174,16 @@ impl Texture {
     pub fn new(texture: wgpu::Texture) -> Self {
         Self {
             view: texture.create_view(&Default::default()),
+            texture,
+        }
+    }
+
+    pub fn new_cubemap(texture: wgpu::Texture) -> Self {
+        Self {
+            view: texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::Cube),
+                ..Default::default()
+            }),
             texture,
         }
     }

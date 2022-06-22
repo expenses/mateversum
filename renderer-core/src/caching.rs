@@ -1,11 +1,11 @@
-pub(crate) struct ResourceCache<T> {
-    inner: elsa::FrozenMap<&'static str, Box<T>>,
+pub struct ResourceCache<T> {
+    inner: elsa::sync::FrozenMap<&'static str, Box<T>>,
 }
 
 impl<T> Default for ResourceCache<T> {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            inner: elsa::sync::FrozenMap::new(),
         }
     }
 }

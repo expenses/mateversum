@@ -9,8 +9,14 @@ edition = "2021"
 raw-window-handle = "0.4.3"
 wasm-bindgen = { version = "0.2.80", features = ["serde-serialize"] }
 glow = "0.11.2"
-wgpu = { version = "0.12.0", features = ["webgl"] }
+wgpu = { version = "0.12.0", features = ["spirv", "webgl"] }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
+log = "0.4.17"
+elsa = "1.7.0"
+glam = { version = "0.20", features = ["bytemuck"] }
+shared-structs = { path = "../shared-structs" }
+bytemuck = { version = "1.9.1", features = ["derive"] }
+crevice = "0.10.0"
 
 [dependencies.web-sys]
 version = "0.3.57"
@@ -18,5 +24,7 @@ features = [
     "XrSession",
     "XrFrame",
     "HtmlCanvasElement",
-    "WebGl2RenderingContext"
+    "WebGl2RenderingContext",
+    "XrRigidTransform",
+    "DomPointReadOnly",
 ]

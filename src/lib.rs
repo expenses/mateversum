@@ -1410,48 +1410,6 @@ fn setup_callbacks(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-pub(crate) struct Instance {
-    pub(crate) position: Vec3,
-    pub(crate) scale: f32,
-    pub(crate) rotation: glam::Quat,
-}
-
-impl Instance {
-    pub(crate) fn new(position: Vec3, scale: f32, rotation: glam::Quat) -> Self {
-        Self {
-            position,
-            scale,
-            rotation,
-        }
-    }
-
-    pub(crate) fn from_transform(transform: web_sys::XrRigidTransform, scale: f32) -> Self {
-        let rotation = transform.orientation();
-
-        let rotation =
-            glam::DQuat::from_xyzw(rotation.x(), rotation.y(), rotation.z(), rotation.w());
-        Self {
-            position: transform_to_position_vec3(&transform),
-            rotation: rotation.as_f32(),
-            scale,
-        }
-    }
-}
-
-fn transform_to_position_vec3(transform: &web_sys::XrRigidTransform) -> Vec3 {
-    let position = transform.position();
-    let position = glam::DVec3::new(position.x(), position.y(), position.z());
-    position.as_vec3()
-}
-
-impl Default for Instance {
-    fn default() -> Self {
-        Self::new(Vec3::ZERO, 1.0, glam::Quat::IDENTITY)
-    }
-}
-
 fn cast_slice<F, T>(slice: &[F]) -> &[T] {
     unsafe {
         std::slice::from_raw_parts(
