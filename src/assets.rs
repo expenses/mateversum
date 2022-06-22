@@ -1,6 +1,7 @@
 use crate::PerformanceSettings;
 use crevice::std140::AsStd140;
 use glam::{Vec2, Vec3};
+use renderer_core::Texture;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1462,18 +1463,4 @@ fn write_bytes_to_texture(
         },
         mip_physical,
     );
-}
-
-pub(crate) struct Texture {
-    pub(crate) texture: wgpu::Texture,
-    pub(crate) view: wgpu::TextureView,
-}
-
-impl Texture {
-    pub(crate) fn new(texture: wgpu::Texture) -> Self {
-        Self {
-            view: texture.create_view(&Default::default()),
-            texture,
-        }
-    }
 }

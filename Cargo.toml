@@ -12,7 +12,6 @@ console_error_panic_hook = "0.1.7"
 console_log = "0.2.0"
 log = "0.4.17"
 wasm-bindgen-futures = "0.4.30"
-wgpu = { version = "0.12.0", features = ["spirv"] }
 futures = { version = "0.3.21", default-features = false }
 gltf = {  git = "https://github.com/expenses/gltf", branch = "third-party-extensions", features = ["KHR_materials_unlit"], default-features = false }
 gltf-helpers = { path = "gltf-helpers" }
@@ -21,6 +20,7 @@ bytemuck = { version = "1.9.1", features = ["derive"] }
 image = { version = "0.24.2", default-features = false, features = ["jpeg", "png"] }
 shared-structs = { path = "shared-structs" }
 glow = "0.11.2"
+wgpu = { version = "0.12.0", features = ["spirv"] }
 wgpu-hal = { git = "https://github.com/expenses/wgpu", branch = "webxr-more-extensions" }
 base64 = "0.13.0"
 js-sys = "0.3.57"
@@ -41,6 +41,7 @@ egui = { git = "https://github.com/expenses/egui", branch = "fixes" }
 slotmap = "1.0.6"
 range-alloc = { git = "https://github.com/expenses/gfx", branch = "range-allocator" }
 raw-window-handle = "0.4.3"
+renderer-core = { path = "renderer-core" }
 
 [dependencies.web-sys]
 version = "0.3.57"
@@ -126,5 +127,6 @@ naga = { git = "https://github.com/expenses/naga", branch = "webxr" }
 members = [
   ".",
   "shared-structs",
-  "gltf-helpers"
+  "gltf-helpers",
+  "renderer-core"
 ]

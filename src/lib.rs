@@ -1,6 +1,7 @@
 use crevice::std140::AsStd140;
 use futures::FutureExt;
 use glam::{Mat4, Vec3};
+use renderer_core::{create_view_from_device_framebuffer, run_rendering_loop};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -108,7 +109,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let start_vr_future = button_click_future(&vr_button);
     let start_ar_future = button_click_future(&ar_button);
 
-    let canvas = js_helpers::Canvas::default();
+    let canvas = renderer_core::Canvas::default();
 
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
@@ -206,7 +207,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         .stencil(render_direct_to_framebuffer);
 
     let webgl2_context =
-        canvas.create_webgl2_context(js_helpers::ContextCreationOptions { stencil: true });
+        canvas.create_webgl2_context(renderer_core::ContextCreationOptions { stencil: true });
 
     let xr_gl_layer = web_sys::XrWebGlLayer::new_with_web_gl2_rendering_context_and_layer_init(
         &xr_session,
@@ -666,7 +667,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let mut instance_buffer =
         InstanceBuffer::new(10, &device, wgpu::BufferUsages::VERTEX, "instance buffer");
 
-    js_helpers::Session { inner: xr_session }.run_rendering_loop(move |time, frame| {
+    run_rendering_loop(&xr_session, move |time, frame| {
         let time = time / 1000.0;
 
         let egui_input = egui::RawInput {
@@ -900,7 +901,7 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 ..Default::default()
             });
 
-            assets::Texture { texture, view }
+            renderer_core::Texture { texture, view }
         });
 
         let tonemap_bind_group = bind_group_cache.get("tonemap bind group", || {
@@ -957,12 +958,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                     ..Default::default()
                 });
 
-                assets::Texture { texture, view }
+                renderer_core::Texture { texture, view }
             }))
         };
 
         let ui_texture = framebuffer_cache.get("ui texture", || {
-            assets::Texture::new(device.create_texture(&wgpu::TextureDescriptor {
+            renderer_core::Texture::new(device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("ui texture"),
                 size: wgpu::Extent3d {
                     width: 1024,
@@ -1813,63 +1814,15 @@ fn quat_to_dom_point(quat: glam::Quat) -> web_sys::DomPointInit {
 }
 
 enum BorrowedOrOwnedFramebuffer<'a> {
-    Owned(assets::Texture),
-    Borrowed(&'a assets::Texture),
+    Owned(renderer_core::Texture),
+    Borrowed(&'a renderer_core::Texture),
 }
 
 impl<'a> BorrowedOrOwnedFramebuffer<'a> {
-    fn get(&'a self) -> &'a assets::Texture {
+    fn get(&'a self) -> &'a renderer_core::Texture {
         match self {
             Self::Owned(texture) => texture,
             Self::Borrowed(texture) => texture,
         }
     }
-}
-
-fn create_view_from_device_framebuffer(
-    device: &wgpu::Device,
-    framebuffer: web_sys::WebGlFramebuffer,
-    base_layer: &web_sys::XrWebGlLayer,
-    format: wgpu::TextureFormat,
-    label: &'static str,
-    extra_usages: wgpu::TextureUsages,
-) -> assets::Texture {
-    #[cfg(not(feature = "webgl"))]
-    panic!();
-
-    #[cfg(feature = "webgl")]
-    assets::Texture::new(unsafe {
-        device.create_texture_from_hal::<wgpu_hal::gles::Api>(
-            wgpu_hal::gles::Texture {
-                inner: wgpu_hal::gles::TextureInner::ExternalFramebuffer { inner: framebuffer },
-                mip_level_count: 1,
-                array_layer_count: 1,
-                format,
-                format_desc: wgpu_hal::gles::TextureFormatDesc {
-                    internal: glow::RGBA,
-                    external: glow::RGBA,
-                    data_type: glow::UNSIGNED_BYTE,
-                },
-                copy_size: wgpu_hal::CopyExtent {
-                    width: base_layer.framebuffer_width(),
-                    height: base_layer.framebuffer_height(),
-                    depth: 1,
-                },
-                is_cubemap: false,
-            },
-            &wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: base_layer.framebuffer_width(),
-                    height: base_layer.framebuffer_height(),
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usages,
-            },
-        )
-    })
 }
