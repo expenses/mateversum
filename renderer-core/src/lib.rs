@@ -83,8 +83,6 @@ impl Canvas {
         gl_attribs.insert(String::from("stencil"), options.stencil);
         let js_gl_attribs = wasm_bindgen::JsValue::from_serde(&gl_attribs).unwrap();
 
-        web_sys::console::log_1(&js_gl_attribs);
-
         self.inner
             .get_context_with_context_options("webgl2", &js_gl_attribs)
             .unwrap()
@@ -115,7 +113,6 @@ pub fn create_view_from_device_framebuffer(
     base_layer: &web_sys::XrWebGlLayer,
     format: wgpu::TextureFormat,
     label: &'static str,
-    extra_usages: wgpu::TextureUsages,
 ) -> Texture {
     Texture::new(unsafe {
         device.create_texture_from_hal::<wgpu_hal::gles::Api>(
@@ -147,7 +144,7 @@ pub fn create_view_from_device_framebuffer(
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | extra_usages,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             },
         )
     })

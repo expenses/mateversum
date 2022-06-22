@@ -865,7 +865,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
             &base_layer,
             wgpu::TextureFormat::Rgba8Unorm,
             "device framebuffer (colour)",
-            wgpu::TextureUsages::COPY_DST,
         );
 
         let num_views = multiview.map(|views| views.get()).unwrap_or(1);
@@ -930,7 +929,6 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
                 &base_layer,
                 wgpu::TextureFormat::Depth24PlusStencil8,
                 "device framebuffer (depth)",
-                wgpu::TextureUsages::empty(),
             ))
         } else {
             // todo: resize this if the frmaebuffer dimensions change.
