@@ -1,117 +1,9 @@
 use crate::ResourceCache;
 
-pub(crate) struct PipelineSet {
-    pub(crate) opaque: wgpu::RenderPipeline,
-    pub(crate) alpha_clipped: wgpu::RenderPipeline,
-    pub(crate) opaque_mirrored: wgpu::RenderPipeline,
-    pub(crate) alpha_clipped_mirrored: wgpu::RenderPipeline,
-}
-
-impl PipelineSet {
-    fn new(
-        device: &wgpu::Device,
-        pipeline_layout: &wgpu::PipelineLayout,
-        mirrored_pipeline_layout: &wgpu::PipelineLayout,
-        normal_vertex: wgpu::VertexState,
-        mirrored_vertex: wgpu::VertexState,
-        opaque_fragment: wgpu::FragmentState,
-        alpha_clipped_fragment: wgpu::FragmentState,
-        multiview: Option<std::num::NonZeroU32>,
-        double_sided: bool,
-        front_face: wgpu::FrontFace,
-    ) -> Self {
-        let normal_primitive_state = wgpu::PrimitiveState {
-            front_face,
-            cull_mode: if !double_sided {
-                Some(wgpu::Face::Back)
-            } else {
-                None
-            },
-            ..Default::default()
-        };
-
-        let normal_depth_state = wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth24PlusStencil8,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            bias: wgpu::DepthBiasState::default(),
-            stencil: wgpu::StencilState::default(),
-        };
-
-        let stencil_test = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::Equal,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::Keep,
-        };
-
-        let stencil_test_depth_state = wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth24PlusStencil8,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            bias: wgpu::DepthBiasState::default(),
-            stencil: wgpu::StencilState {
-                front: stencil_test,
-                back: stencil_test,
-                read_mask: 0xff,
-                write_mask: 0xff,
-            },
-        };
-
-        let mirrored_primitive_state = wgpu::PrimitiveState {
-            front_face: match front_face {
-                wgpu::FrontFace::Ccw => wgpu::FrontFace::Cw,
-                wgpu::FrontFace::Cw => wgpu::FrontFace::Ccw,
-            },
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        };
-
-        Self {
-            opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("opaque pipeline"),
-                layout: Some(pipeline_layout),
-                vertex: normal_vertex.clone(),
-                fragment: Some(opaque_fragment.clone()),
-                primitive: normal_primitive_state,
-                depth_stencil: Some(normal_depth_state.clone()),
-                multisample: Default::default(),
-                multiview,
-            }),
-            alpha_clipped: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("alpha clipped pipeline"),
-                layout: Some(pipeline_layout),
-                vertex: normal_vertex.clone(),
-                fragment: Some(alpha_clipped_fragment.clone()),
-                primitive: normal_primitive_state,
-                depth_stencil: Some(normal_depth_state),
-                multisample: Default::default(),
-                multiview,
-            }),
-            opaque_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("opaque mirrored pipeline"),
-                layout: Some(mirrored_pipeline_layout),
-                vertex: mirrored_vertex.clone(),
-                fragment: Some(opaque_fragment.clone()),
-                primitive: mirrored_primitive_state,
-                depth_stencil: Some(stencil_test_depth_state.clone()),
-                multisample: Default::default(),
-                multiview,
-            }),
-            alpha_clipped_mirrored: device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("alpha clipped pipeline"),
-                    layout: Some(mirrored_pipeline_layout),
-                    vertex: mirrored_vertex,
-                    fragment: Some(alpha_clipped_fragment),
-                    primitive: mirrored_primitive_state,
-                    depth_stencil: Some(stencil_test_depth_state),
-                    multisample: Default::default(),
-                    multiview,
-                },
-            ),
-        }
-    }
+pub(crate) struct PipelineOptions {
+    pub(crate) multiview: Option<std::num::NonZeroU32>,
+    pub(crate) flip_viewport: bool,
+    pub(crate) inline_tonemapping: bool,
 }
 
 pub(crate) struct Pipelines {
@@ -135,21 +27,21 @@ impl Pipelines {
         tonemap_bgl: &wgpu::BindGroupLayout,
         ui_texture_bgl: &wgpu::BindGroupLayout,
         skybox_bgl: &wgpu::BindGroupLayout,
-        multiview: Option<std::num::NonZeroU32>,
-        render_direct_to_framebuffer: bool,
-        inline_tonemapping: bool,
+        options: &PipelineOptions,
     ) -> Self {
-        let target_format = if inline_tonemapping {
+        let target_format = if options.inline_tonemapping {
             wgpu::TextureFormat::Rgba8Unorm
         } else {
             wgpu::TextureFormat::Rgba16Float
         };
 
-        let front_face = if render_direct_to_framebuffer {
+        let front_face = if options.flip_viewport {
             wgpu::FrontFace::Cw
         } else {
             wgpu::FrontFace::Ccw
         };
+
+        let multiview = options.multiview;
 
         let uniform_only_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -524,6 +416,120 @@ impl Pipelines {
                 multisample: Default::default(),
                 multiview,
             }),
+        }
+    }
+}
+
+pub(crate) struct PipelineSet {
+    pub(crate) opaque: wgpu::RenderPipeline,
+    pub(crate) alpha_clipped: wgpu::RenderPipeline,
+    pub(crate) opaque_mirrored: wgpu::RenderPipeline,
+    pub(crate) alpha_clipped_mirrored: wgpu::RenderPipeline,
+}
+
+impl PipelineSet {
+    fn new(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        mirrored_pipeline_layout: &wgpu::PipelineLayout,
+        normal_vertex: wgpu::VertexState,
+        mirrored_vertex: wgpu::VertexState,
+        opaque_fragment: wgpu::FragmentState,
+        alpha_clipped_fragment: wgpu::FragmentState,
+        multiview: Option<std::num::NonZeroU32>,
+        double_sided: bool,
+        front_face: wgpu::FrontFace,
+    ) -> Self {
+        let normal_primitive_state = wgpu::PrimitiveState {
+            front_face,
+            cull_mode: if !double_sided {
+                Some(wgpu::Face::Back)
+            } else {
+                None
+            },
+            ..Default::default()
+        };
+
+        let normal_depth_state = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: wgpu::StencilState::default(),
+        };
+
+        let stencil_test = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        };
+
+        let stencil_test_depth_state = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState::default(),
+            stencil: wgpu::StencilState {
+                front: stencil_test,
+                back: stencil_test,
+                read_mask: 0xff,
+                write_mask: 0xff,
+            },
+        };
+
+        let mirrored_primitive_state = wgpu::PrimitiveState {
+            front_face: match front_face {
+                wgpu::FrontFace::Ccw => wgpu::FrontFace::Cw,
+                wgpu::FrontFace::Cw => wgpu::FrontFace::Ccw,
+            },
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        };
+
+        Self {
+            opaque: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("opaque pipeline"),
+                layout: Some(pipeline_layout),
+                vertex: normal_vertex.clone(),
+                fragment: Some(opaque_fragment.clone()),
+                primitive: normal_primitive_state,
+                depth_stencil: Some(normal_depth_state.clone()),
+                multisample: Default::default(),
+                multiview,
+            }),
+            alpha_clipped: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("alpha clipped pipeline"),
+                layout: Some(pipeline_layout),
+                vertex: normal_vertex.clone(),
+                fragment: Some(alpha_clipped_fragment.clone()),
+                primitive: normal_primitive_state,
+                depth_stencil: Some(normal_depth_state),
+                multisample: Default::default(),
+                multiview,
+            }),
+            opaque_mirrored: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("opaque mirrored pipeline"),
+                layout: Some(mirrored_pipeline_layout),
+                vertex: mirrored_vertex.clone(),
+                fragment: Some(opaque_fragment.clone()),
+                primitive: mirrored_primitive_state,
+                depth_stencil: Some(stencil_test_depth_state.clone()),
+                multisample: Default::default(),
+                multiview,
+            }),
+            alpha_clipped_mirrored: device.create_render_pipeline(
+                &wgpu::RenderPipelineDescriptor {
+                    label: Some("alpha clipped pipeline"),
+                    layout: Some(mirrored_pipeline_layout),
+                    vertex: mirrored_vertex,
+                    fragment: Some(alpha_clipped_fragment),
+                    primitive: mirrored_primitive_state,
+                    depth_stencil: Some(stencil_test_depth_state),
+                    multisample: Default::default(),
+                    multiview,
+                },
+            ),
         }
     }
 }

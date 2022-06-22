@@ -22,7 +22,7 @@ use assets::{
 use buffers::{IndexBuffer, InstanceBuffer, VertexBuffers};
 use caching::ResourceCache;
 use js_helpers::{append_break, button_click_future, create_button};
-use pipelines::Pipelines;
+use pipelines::{PipelineOptions, Pipelines};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -371,9 +371,11 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
         &tonemap_bgl,
         &ui_texture_bgl,
         &skybox_bgl,
-        multiview,
-        render_direct_to_framebuffer,
-        inline_tonemapping,
+        &PipelineOptions {
+            multiview,
+            flip_viewport: render_direct_to_framebuffer,
+            inline_tonemapping,
+        },
     );
 
     let vertex_buffers = Rc::new(RefCell::new(VertexBuffers::new(1024, &device)));

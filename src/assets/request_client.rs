@@ -96,8 +96,8 @@ impl RequestClient {
                 .map_err(|err| anyhow::anyhow!("{:?}", err))?;
 
         let response = match self.lookup(&cache_request).await? {
-            Some(response) => response,
-            None => {
+            Some(response) if cache => response,
+            _ => {
                 let request =
                     web_sys::Request::new_with_str_and_init(fetch_url.as_str(), &request_init)
                         .map_err(|err| anyhow::anyhow!("{:?}", err))?;
