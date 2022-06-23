@@ -1,8 +1,8 @@
 mod bind_group_layouts;
-mod caching;
 mod instance;
 mod pipelines;
 
+pub mod caching;
 pub use bytemuck;
 pub use crevice;
 pub use glam;

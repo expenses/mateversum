@@ -3,7 +3,6 @@ use crate::caching::ResourceCache;
 
 pub struct PipelineOptions {
     pub multiview: Option<std::num::NonZeroU32>,
-    pub flip_viewport: bool,
     pub inline_tonemapping: bool,
 }
 
@@ -39,7 +38,9 @@ impl Pipelines {
             wgpu::TextureFormat::Rgba16Float
         };
 
-        let front_face = if options.flip_viewport {
+        let flip_viewport = options.render_direct_to_framebuffer();
+
+        let front_face = if flip_viewport {
             wgpu::FrontFace::Cw
         } else {
             wgpu::FrontFace::Ccw

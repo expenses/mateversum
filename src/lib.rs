@@ -1,7 +1,7 @@
 use crevice::std140::AsStd140;
 use futures::FutureExt;
 use glam::{Mat4, Vec3};
-use renderer_core::{create_view_from_device_framebuffer, run_rendering_loop};
+use renderer_core::{create_view_from_device_framebuffer, run_rendering_loop, caching};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -12,7 +12,6 @@ use wgpu::util::DeviceExt;
 
 mod assets;
 mod buffers;
-mod caching;
 mod js_helpers;
 mod pipelines;
 
@@ -23,7 +22,7 @@ use assets::{
 use buffers::{IndexBuffer, InstanceBuffer, VertexBuffers};
 use caching::ResourceCache;
 use js_helpers::{append_break, button_click_future, create_button};
-use pipelines::{PipelineOptions, Pipelines};
+use renderer_core::{PipelineOptions, Pipelines, Instance};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -366,15 +365,12 @@ pub async fn run() -> Result<(), wasm_bindgen::JsValue> {
     let pipelines = Pipelines::new(
         &device,
         &shader_cache,
-        &uniform_bgl,
-        &model_bgl,
-        &mirror_uniform_bgl,
-        &tonemap_bgl,
-        &ui_texture_bgl,
-        &skybox_bgl,
+        &renderer_core::BindGroupLayouts::new(&device, &PipelineOptions {
+            multiview,
+            inline_tonemapping,
+        }),
         &PipelineOptions {
             multiview,
-            flip_viewport: render_direct_to_framebuffer,
             inline_tonemapping,
         },
     );

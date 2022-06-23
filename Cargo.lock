@@ -1102,8 +1102,14 @@ checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
 name = "renderer-core"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "crevice",
+ "elsa",
+ "glam",
  "glow",
+ "log",
  "raw-window-handle",
+ "shared-structs",
  "wasm-bindgen",
  "web-sys",
  "wgpu",

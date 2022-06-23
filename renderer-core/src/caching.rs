@@ -11,7 +11,7 @@ impl<T> Default for ResourceCache<T> {
 }
 
 impl<T> ResourceCache<T> {
-    pub(crate) fn get<F: Fn() -> T>(&self, key: &'static str, func: F) -> &T {
+    pub fn get<F: Fn() -> T>(&self, key: &'static str, func: F) -> &T {
         if let Some(resource) = self.inner.get(key) {
             resource
         } else {
@@ -22,7 +22,7 @@ impl<T> ResourceCache<T> {
     }
 }
 
-pub(crate) struct PipelineData {
-    pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
+pub struct PipelineData {
+    pub pipeline: wgpu::RenderPipeline,
+    pub bind_group_layout: wgpu::BindGroupLayout,
 }
