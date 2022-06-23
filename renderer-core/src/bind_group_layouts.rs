@@ -5,6 +5,7 @@ pub struct BindGroupLayouts {
     pub tonemap: wgpu::BindGroupLayout,
     pub ui_texture: wgpu::BindGroupLayout,
     pub skybox: wgpu::BindGroupLayout,
+    pub uint_texture: wgpu::BindGroupLayout
 }
 
 impl BindGroupLayouts {
@@ -60,6 +61,17 @@ impl BindGroupLayouts {
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         };
 
+        let uint_texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            count: None,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Uint,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+        };
+
         Self {
             uniform: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("uniform bind group layout"),
@@ -108,6 +120,10 @@ impl BindGroupLayouts {
                 label: Some("skybox bind group layout"),
                 entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
             }),
+            uint_texture: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("uint texture bind group layout"),
+                entries: &[uint_texture_entry(0)]
+            })
         }
     }
 }
