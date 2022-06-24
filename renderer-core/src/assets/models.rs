@@ -12,7 +12,7 @@ pub struct Context<T: HttpClient + 'static> {
     pub index_buffer: Arc<parking_lot::Mutex<crate::buffers::IndexBuffer>>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PrimitiveRanges {
     pub opaque: Range<usize>,
     pub alpha_clipped: Range<usize>,

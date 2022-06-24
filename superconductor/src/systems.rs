@@ -2,7 +2,7 @@ use crate::{
     BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, Instance, InstanceBuffer,
     IntermediateColorFramebuffer, IntermediateDepthFramebuffer, LinearSampler, MainBindGroup,
     Model, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, TestModel,
-    TestModelBindGroup, UniformBuffer, VertexBuffers,
+    TestModelBindGroup, TestModelUrl, UniformBuffer, VertexBuffers,
 };
 use bevy_ecs::prelude::{Commands, NonSend, Query, Res, ResMut};
 use renderer_core::glam::{Vec3, Vec4};
@@ -87,6 +87,7 @@ pub fn allocate_bind_groups(
     queue: Res<Queue>,
     pipelines: Res<Pipelines>,
     bind_group_layouts: Res<BindGroupLayouts>,
+    test_model_url: Res<TestModelUrl>,
     mut commands: Commands,
 ) {
     let device = &device.0;
@@ -440,10 +441,7 @@ pub fn allocate_bind_groups(
     commands.insert_resource(InstanceBuffer(instance_buffer));
 
     wasm_bindgen_futures::spawn_local({
-        let url = url::Url::parse(
-            "https://expenses.github.io/mateversum-web/glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf",
-        )
-        .unwrap();
+        let url = test_model_url.0.clone();
 
         let device = device.clone();
         let queue = queue.clone();
@@ -748,16 +746,62 @@ pub fn render(
 
         render_pass.set_bind_group(0, &main_bind_group, &[]);
 
-        render_pass.set_pipeline(&pipelines.pbr.opaque);
-        render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
-        for primitive_index in test_model_inner.primitive_ranges.opaque.clone() {
-            let primitive = &test_model_inner.primitives[primitive_index];
+        {
+            render_pass.set_pipeline(&pipelines.pbr.opaque);
+            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
+            for primitive_index in test_model_inner.primitive_ranges.opaque.clone() {
+                let primitive = &test_model_inner.primitives[primitive_index];
 
-            render_pass.draw_indexed(
-                primitive.index_buffer_range.clone(),
-                0,
-                test_model.instance_range.clone(),
-            );
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    test_model.instance_range.clone(),
+                );
+            }
+
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
+            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
+            for primitive_index in test_model_inner
+                .primitive_ranges
+                .opaque_double_sided
+                .clone()
+            {
+                let primitive = &test_model_inner.primitives[primitive_index];
+
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    test_model.instance_range.clone(),
+                );
+            }
+
+            render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
+            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
+            for primitive_index in test_model_inner.primitive_ranges.alpha_clipped.clone() {
+                let primitive = &test_model_inner.primitives[primitive_index];
+
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    test_model.instance_range.clone(),
+                );
+            }
+
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
+            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
+            for primitive_index in test_model_inner
+                .primitive_ranges
+                .alpha_clipped_double_sided
+                .clone()
+            {
+                let primitive = &test_model_inner.primitives[primitive_index];
+
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    test_model.instance_range.clone(),
+                );
+            }
         }
 
         render_pass.set_pipeline(&pipelines.skybox);

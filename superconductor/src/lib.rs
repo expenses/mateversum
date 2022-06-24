@@ -3,7 +3,9 @@ use bevy_ecs::prelude::SystemStage;
 use std::ops::Range;
 use std::sync::Arc;
 
+pub use bevy_app;
 pub use renderer_core;
+pub use url;
 
 use renderer_core::assets::models::Model;
 use renderer_core::glam::Vec3;
@@ -17,6 +19,9 @@ pub struct UniformBuffer(Arc<wgpu::Buffer>);
 pub struct MainBindGroup(Arc<parking_lot::Mutex<wgpu::BindGroup>>);
 pub struct SkyboxUniformBuffer(wgpu::Buffer);
 pub struct SkyboxUniformBindGroup(wgpu::BindGroup);
+
+pub struct TestModelUrl(pub url::Url);
+
 pub struct TestModel {
     model: Arc<parking_lot::Mutex<Model>>,
     instances: Vec<renderer_core::Instance>,
