@@ -1,0 +1,43 @@
+[package]
+name = "superconductor"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bevy_app = { version = "0.7", default-features=false }
+bevy_ecs = { version = "0.7", default-features=false }
+log = "0.4.17"
+wasm-bindgen = "0.2.80"
+renderer-core = { path = "../renderer-core" }
+wasm-bindgen-futures = "0.4.31"
+js-sys = "0.3.58"
+futures = "0.3.21"
+wgpu = "0.12.0"
+anyhow = "1.0.58"
+url = "2.2.2"
+parking_lot = "0.12.1"
+
+[dependencies.web-sys]
+version = "0.3.57"
+features = [
+    "HtmlButtonElement",
+    "Document",
+    "Navigator",
+    "XrReferenceSpaceType",
+    "XrSessionMode",
+    "Navigator",
+    "XrSystem",
+    "XrSessionInit",
+    "XrWebGlLayer",
+    "XrWebGlLayerInit",
+    "XrRenderStateInit",
+    "XrRenderState",
+    "XrReferenceSpace",
+    "XrViewerPose",
+    "XrView",
+    "RequestInit",
+    "Request",
+    "Response",
+]
