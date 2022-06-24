@@ -1,10 +1,9 @@
-
-use std::sync::Arc;
-use crate::Texture;
-use std::num::NonZeroU32;
-use wgpu::util::DeviceExt;
-use std::io::Read;
 use super::HttpClient;
+use crate::Texture;
+use std::io::Read;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 pub struct Context<T: HttpClient + 'static> {
     pub pipelines: Arc<crate::Pipelines>,
@@ -15,7 +14,7 @@ pub struct Context<T: HttpClient + 'static> {
 }
 
 pub async fn load_ktx2_cubemap<T: HttpClient + Clone + 'static>(
-    context: &Context<T>,
+    context: Context<T>,
     url: &url::Url,
 ) -> anyhow::Result<Arc<Texture>> {
     let mut header_bytes = [0; ktx2::Header::LENGTH];
@@ -83,7 +82,10 @@ pub async fn load_ktx2_cubemap<T: HttpClient + Clone + 'static>(
     let base_width = header.pixel_width - (header.pixel_width % 4);
     let base_height = header.pixel_height - (header.pixel_height % 4);
 
-    let bc6h_supported = context.device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+    let bc6h_supported = context
+        .device
+        .features()
+        .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
 
     let texture_descriptor = move || wgpu::TextureDescriptor {
         label: None,
@@ -147,8 +149,7 @@ pub async fn load_ktx2_cubemap<T: HttpClient + Clone + 'static>(
                 };
 
                 if !bc6h_supported {
-                    let mut command_encoder =
-                        device.create_command_encoder(&Default::default());
+                    let mut command_encoder = device.create_command_encoder(&Default::default());
 
                     let stride = decompressed.len() / 6;
 
@@ -173,34 +174,31 @@ pub async fn load_ktx2_cubemap<T: HttpClient + Clone + 'static>(
                             bytes,
                         );
 
-                        let output_texture =
-                            device.create_texture(&wgpu::TextureDescriptor {
-                                label: None,
-                                size: wgpu::Extent3d {
-                                    width: base_width >> i,
-                                    height: base_height >> i,
-                                    depth_or_array_layers: 1,
-                                },
-                                mip_level_count: 1,
-                                sample_count: 1,
-                                dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::Rg11b10Float,
-                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                    | wgpu::TextureUsages::COPY_SRC,
-                            });
+                        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+                            label: None,
+                            size: wgpu::Extent3d {
+                                width: base_width >> i,
+                                height: base_height >> i,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rg11b10Float,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::COPY_SRC,
+                        });
 
-                        let bind_group =
-                            device
-                                .create_bind_group(&wgpu::BindGroupDescriptor {
-                                    label: None,
-                                    layout: &bind_group_layouts.uint_texture,
-                                    entries: &[wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: wgpu::BindingResource::TextureView(
-                                            &input_texture.create_view(&Default::default()),
-                                        ),
-                                    }],
-                                });
+                        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: None,
+                            layout: &bind_group_layouts.uint_texture,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &input_texture.create_view(&Default::default()),
+                                ),
+                            }],
+                        });
 
                         let output_view = output_texture.create_view(&Default::default());
 
@@ -251,8 +249,7 @@ pub async fn load_ktx2_cubemap<T: HttpClient + Clone + 'static>(
                         );
                     }
 
-                    queue
-                        .submit(std::iter::once(command_encoder.finish()));
+                    queue.submit(std::iter::once(command_encoder.finish()));
                 } else {
                     write_bytes_to_texture(
                         &queue,

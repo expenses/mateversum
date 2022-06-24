@@ -1,4 +1,5 @@
 mod bind_group_layouts;
+mod buffers;
 mod instance;
 mod pipelines;
 
@@ -11,6 +12,7 @@ pub use glam;
 pub use shared_structs;
 
 pub use bind_group_layouts::BindGroupLayouts;
+pub use buffers::{IndexBuffer, InstanceBuffer, VertexBuffers};
 pub use caching::ResourceCache;
 pub use instance::Instance;
 pub use pipelines::{PipelineOptions, Pipelines};

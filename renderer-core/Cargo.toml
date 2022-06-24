@@ -22,6 +22,11 @@ zstd = { version = "0.11.2", default-features = false, features = ["wasm"] }
 anyhow = "1.0.58"
 url = "2.2.2"
 wasm-bindgen-futures = "0.4.31"
+gltf = {  git = "https://github.com/expenses/gltf", branch = "third-party-extensions", features = ["KHR_materials_unlit"], default-features = false }
+gltf-helpers = { path = "../gltf-helpers" }
+base64 = "0.13.0"
+range-alloc = { git = "https://github.com/expenses/gfx", branch = "range-allocator" }
+parking_lot = "0.12.1"
 
 [dependencies.web-sys]
 version = "0.3.57"

@@ -1,14 +1,17 @@
 use crate::{
-    BindGroupLayouts, CompositeBindGroup, Device, IntermediateColorFramebuffer,
-    IntermediateDepthFramebuffer, LinearSampler, MainBindGroup, Pipelines, Queue,
-    SkyboxUniformBindGroup, SkyboxUniformBuffer, UniformBuffer,
+    BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, InstanceBuffer,
+    IntermediateColorFramebuffer, IntermediateDepthFramebuffer, LinearSampler, MainBindGroup,
+    Model, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, TestModel,
+    TestModelBindGroup, UniformBuffer, VertexBuffers,
 };
 use bevy_ecs::prelude::{Commands, NonSend, Res, ResMut};
+use renderer_core::glam::{Vec3, Vec4};
 use renderer_core::{
     bytemuck, create_view_from_device_framebuffer, crevice::std140::AsStd140, shared_structs,
-    Texture,
+    Instance, Texture,
 };
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 pub fn create_bind_group_layouts_and_pipelines(
     device: Res<Device>,
@@ -61,7 +64,7 @@ pub fn allocate_bind_groups(
             dimension: wgpu::TextureDimension::D2,
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             format: wgpu::TextureFormat::Rgba16Float,
-        }
+        },
     )));
 
     #[rustfmt::skip]
@@ -170,34 +173,49 @@ pub fn allocate_bind_groups(
     commands.insert_resource(SkyboxUniformBindGroup(skybox_uniform_bind_group));
 
     wasm_bindgen_futures::spawn_local({
-        let url = url::Url::parse(
-            "https://expenses.github.io/mateversum-web/environment_maps/helipad/specular_compressed.ktx2",
-        )
-        .unwrap();
-
         let device = device.clone();
         let queue = queue.clone();
         let pipelines = pipelines.clone();
         let bind_group_layouts = bind_group_layouts.clone();
+        let linear_sampler = linear_sampler.clone();
 
         async move {
-            let result = renderer_core::assets::textures::load_ktx2_cubemap(
-                &renderer_core::assets::textures::Context {
+            let specular_url = url::Url::parse(
+                "https://expenses.github.io/mateversum-web/environment_maps/helipad/specular_compressed.ktx2",
+            )
+            .unwrap();
+
+            let specular_fut = renderer_core::assets::textures::load_ktx2_cubemap(
+                renderer_core::assets::textures::Context {
+                    device: device.clone(),
+                    queue: queue.clone(),
+                    http_client: super::SimpleHttpClient,
+                    bind_group_layouts: bind_group_layouts.clone(),
+                    pipelines: pipelines.clone(),
+                },
+                &specular_url,
+            );
+
+            let diffuse_url = url::Url::parse(
+                "https://expenses.github.io/mateversum-web/environment_maps/helipad/diffuse_compressed.ktx2",
+            )
+            .unwrap();
+
+            let diffuse_fut = renderer_core::assets::textures::load_ktx2_cubemap(
+                renderer_core::assets::textures::Context {
                     device: device.clone(),
                     queue,
                     http_client: super::SimpleHttpClient,
                     bind_group_layouts: bind_group_layouts.clone(),
                     pipelines,
                 },
-                &url,
-            )
-            .await;
+                &diffuse_url,
+            );
 
-            match result {
-                Err(error) => {
-                    log::error!("Got an error while trying to load the cubemap: {}", error);
-                }
-                Ok(ibl_specular_cubemap_texture) => {
+            let results = futures::future::join(specular_fut, diffuse_fut).await;
+
+            match results {
+                (Ok(ibl_specular_cubemap_texture), Ok(ibl_diffuse_cubemap_texture)) => {
                     // Bind groups are immutable so we need to rebuild it.
                     *main_bind_group.lock() =
                         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -233,9 +251,203 @@ pub fn allocate_bind_groups(
                             ],
                         });
                 }
+                _ => {
+                    log::error!("Got an error while trying to load the cubemaps");
+                }
             }
         }
     });
+
+    fn load_single_pixel_image(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        bytes: &[u8; 4],
+    ) -> Texture {
+        Texture::new(device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            },
+            bytes,
+        ))
+    }
+
+    let black_image = load_single_pixel_image(
+        &*device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &[0, 0, 0, 255],
+    );
+    let default_metallic_roughness_image = load_single_pixel_image(
+        &*device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        &[0, 255, 0, 255],
+    );
+    let flat_normals_image = load_single_pixel_image(
+        &*device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        &[127, 127, 255, 255],
+    );
+    let white_image = load_single_pixel_image(
+        &*device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &[255, 255, 255, 255],
+    );
+
+    let material_settings = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("material settings"),
+        contents: bytemuck::bytes_of(
+            &shared_structs::MaterialSettings {
+                base_color_factor: Vec4::ONE,
+                emissive_factor: Vec3::ZERO,
+                metallic_factor: 0.0,
+                roughness_factor: 1.0,
+                is_unlit: false as u32,
+            }
+            .as_std140(),
+        ),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    commands.insert_resource(TestModelBindGroup(device.create_bind_group(
+        &wgpu::BindGroupDescriptor {
+            label: Some("test model bind group"),
+            layout: &bind_group_layouts.model,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&white_image.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&flat_normals_image.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        &default_metallic_roughness_image.view,
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&black_image.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: material_settings.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
+                },
+            ],
+        },
+    )));
+
+    let index_buffer = Arc::new(parking_lot::Mutex::new(renderer_core::IndexBuffer::new(
+        1024, &device,
+    )));
+
+    let vertex_buffers = Arc::new(parking_lot::Mutex::new(renderer_core::VertexBuffers::new(
+        1024, &device,
+    )));
+
+    let instance_buffer = {
+        let mut instance_buffer = renderer_core::InstanceBuffer::new(
+            1024,
+            &device,
+            wgpu::BufferUsages::VERTEX,
+            "instance buffer",
+        );
+
+        let mut command_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("command encoder"),
+        });
+
+        instance_buffer.push(
+            &[Instance::new(
+                Vec3::new(0.0, 1.0, -2.0),
+                1.0,
+                Default::default(),
+            )],
+            &device,
+            &queue,
+            &mut command_encoder,
+        );
+
+        queue.submit(std::iter::once(command_encoder.finish()));
+
+        instance_buffer
+    };
+
+    let test_model = Arc::new(parking_lot::Mutex::new(Model::default()));
+
+    commands.insert_resource(TestModel(test_model.clone()));
+    commands.insert_resource(IndexBuffer(index_buffer.clone()));
+    commands.insert_resource(VertexBuffers(vertex_buffers.clone()));
+    commands.insert_resource(InstanceBuffer(instance_buffer));
+
+    wasm_bindgen_futures::spawn_local({
+        let url = url::Url::parse(
+            "https://expenses.github.io/mateversum-web/glTF-Sample-Models/2.0/DamagedHelmet/glTF/DamagedHelmet.gltf",
+        )
+        .unwrap();
+
+        let device = device.clone();
+        let queue = queue.clone();
+
+        async move {
+            let result = renderer_core::assets::models::Model::load(
+                &renderer_core::assets::models::Context {
+                    device,
+                    queue,
+                    http_client: super::SimpleHttpClient,
+                    index_buffer,
+                    vertex_buffers,
+                },
+                &url,
+            )
+            .await;
+
+            match result {
+                Err(error) => {
+                    log::error!(
+                        "Got an error while trying to load the test model: {}",
+                        error
+                    );
+                }
+                Ok(model) => {
+                    *test_model.lock() = model;
+                }
+            }
+        }
+    })
 }
 
 pub fn update_uniform_buffers(
@@ -325,15 +537,25 @@ pub fn render(
     mut composite_bind_group: ResMut<CompositeBindGroup>,
     pipeline_options: Res<renderer_core::PipelineOptions>,
     linear_sampler: Res<LinearSampler>,
+    (index_buffer, vertex_buffers, instance_buffer): (
+        Res<IndexBuffer>,
+        Res<VertexBuffers>,
+        Res<InstanceBuffer>,
+    ),
+    test_model: Res<TestModel>,
+    test_model_bind_group: Res<TestModelBindGroup>,
 ) {
     let device = &device.0;
     let queue = &queue.0;
     let pipelines = &pipelines.0;
     let bind_group_layouts = &bind_group_layouts.0;
 
-    // This `.lock` looks scary, but it will never actually block (in wasm)
+    // These `.lock`s looks scary, but it will never actually block (in wasm)
     // because that would panic the main thread otherwise!
     let main_bind_group = &main_bind_group.0.lock();
+    let vertex_buffers = &vertex_buffers.0.lock();
+    let index_buffer = &index_buffer.0.lock();
+    let test_model = &test_model.0.lock();
 
     let xr_session: web_sys::XrSession = frame.session();
 
@@ -492,8 +714,23 @@ pub fn render(
     });
 
     {
-        render_pass.set_pipeline(&pipelines.skybox);
+        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
+        render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
+        render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
+        render_pass.set_vertex_buffer(3, instance_buffer.0.buffer.slice(..));
+
         render_pass.set_bind_group(0, &main_bind_group, &[]);
+
+        render_pass.set_pipeline(&pipelines.pbr.opaque);
+        render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
+        for primitive_index in test_model.primitive_ranges.opaque.clone() {
+            let primitive = &test_model.primitives[primitive_index];
+
+            render_pass.draw_indexed(primitive.index_buffer_range.clone(), 0, 0..1);
+        }
+
+        render_pass.set_pipeline(&pipelines.skybox);
         render_pass.set_bind_group(1, &skybox_uniform_bind_group.0, &[]);
         render_pass.draw(0..3, 0..1);
     }

@@ -1,11 +1,11 @@
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::SystemStage;
-use futures::FutureExt;
 use std::ops::Range;
 use std::sync::Arc;
-use wasm_bindgen::JsCast;
 
 pub use renderer_core;
+
+use renderer_core::assets::models::Model;
 
 pub struct Device(Arc<wgpu::Device>);
 pub struct Queue(Arc<wgpu::Queue>);
@@ -16,6 +16,12 @@ pub struct UniformBuffer(Arc<wgpu::Buffer>);
 pub struct MainBindGroup(Arc<parking_lot::Mutex<wgpu::BindGroup>>);
 pub struct SkyboxUniformBuffer(wgpu::Buffer);
 pub struct SkyboxUniformBindGroup(wgpu::BindGroup);
+pub struct TestModel(Arc<parking_lot::Mutex<Model>>);
+pub struct TestModelBindGroup(wgpu::BindGroup);
+
+pub struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
+pub struct VertexBuffers(Arc<parking_lot::Mutex<renderer_core::VertexBuffers>>);
+pub struct InstanceBuffer(renderer_core::InstanceBuffer);
 
 pub struct FrameTime(pub f64);
 
@@ -52,26 +58,29 @@ impl Plugin for XrPlugin {
 
 mod systems;
 
-pub async fn initialise() -> (
+pub enum Mode {
+    Vr,
+    Ar,
+    Desktop,
+}
+
+pub async fn initialise(
+    mode: Mode,
+) -> (
     web_sys::XrSession,
     web_sys::XrReferenceSpace,
     Device,
     Queue,
     renderer_core::PipelineOptions,
 ) {
-    let vr_button = create_button("Start VR");
-    let ar_button = create_button("Start AR");
-
-    let start_vr_future = button_click_future(&vr_button);
-    let start_ar_future = button_click_future(&ar_button);
+    let mode = match mode {
+        Mode::Vr => web_sys::XrSessionMode::ImmersiveVr,
+        Mode::Ar => web_sys::XrSessionMode::ImmersiveAr,
+        Mode::Desktop => unimplemented!("A desktop mode isn't supported yet"),
+    };
 
     let navigator = web_sys::window().unwrap().navigator();
     let xr = navigator.xr();
-
-    let mode = futures::select! {
-        _ = Box::pin(start_vr_future.fuse()) => web_sys::XrSessionMode::ImmersiveVr,
-        _ = Box::pin(start_ar_future.fuse()) => web_sys::XrSessionMode::ImmersiveAr,
-    };
 
     let required_features = js_sys::Array::of1(&"local-floor".into());
 
@@ -177,38 +186,6 @@ pub async fn initialise() -> (
         Queue(Arc::new(queue)),
         pipeline_options,
     )
-}
-
-async fn button_click_future(button: &web_sys::HtmlButtonElement) {
-    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _reject| {
-        button.set_onclick(Some(&resolve))
-    }))
-    .await
-    .unwrap();
-}
-
-fn create_button(text: &str) -> web_sys::HtmlButtonElement {
-    let button: web_sys::HtmlButtonElement = web_sys::window()
-        .unwrap()
-        .document()
-        .unwrap()
-        .create_element("button")
-        .unwrap()
-        .unchecked_into();
-
-    button.set_inner_text(text);
-
-    let body = web_sys::window()
-        .unwrap()
-        .document()
-        .unwrap()
-        .body()
-        .unwrap();
-
-    body.append_child(&web_sys::Element::from(button.clone()))
-        .unwrap();
-
-    button
 }
 
 #[derive(Clone)]

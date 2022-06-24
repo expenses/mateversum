@@ -308,13 +308,12 @@ impl Pipelines {
             targets: &[target_format.into()],
         };
 
-        let bc6h_decompression_pipeline_layout = device.create_pipeline_layout(
-            &wgpu::PipelineLayoutDescriptor {
+        let bc6h_decompression_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("bc6h decompression pipeline layout"),
                 bind_group_layouts: &[&bind_group_layouts.uint_texture],
                 push_constant_ranges: &[],
-            },
-        );
+            });
 
         let bc6h_decompression_target = wgpu::TextureFormat::Rg11b10Float;
 
@@ -442,34 +441,32 @@ impl Pipelines {
                 multisample: Default::default(),
                 multiview,
             }),
-            bc6h_decompression: device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&bc6h_decompression_pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: shader_cache.get("fullscreen_tri", || {
-                            device.create_shader_module(&wgpu::include_spirv!(
-                                "../../compiled-shaders/fullscreen_tri.spv"
-                            ))
-                        }),
-                        entry_point: "fullscreen_tri",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: shader_cache.get("bc6", || {
-                            device.create_shader_module(&wgpu::include_spirv!(
-                                "../../compiled-shaders/bc6.spv"
-                            ))
-                        }),
-                        entry_point: "main",
-                        targets: &[bc6h_decompression_target.into()],
+            bc6h_decompression: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&bc6h_decompression_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader_cache.get("fullscreen_tri", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../../compiled-shaders/fullscreen_tri.spv"
+                        ))
                     }),
-                    primitive: Default::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    multiview: Default::default(),
+                    entry_point: "fullscreen_tri",
+                    buffers: &[],
                 },
-            )
+                fragment: Some(wgpu::FragmentState {
+                    module: shader_cache.get("bc6", || {
+                        device.create_shader_module(&wgpu::include_spirv!(
+                            "../../compiled-shaders/bc6.spv"
+                        ))
+                    }),
+                    entry_point: "main",
+                    targets: &[bc6h_decompression_target.into()],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: Default::default(),
+            }),
         }
     }
 }

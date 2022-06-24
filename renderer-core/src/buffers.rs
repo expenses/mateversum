@@ -4,12 +4,12 @@ use std::ops::Range;
 use super::Instance;
 use glam::{Vec2, Vec3};
 
-pub(crate) type InstanceBuffer = VecGpuBuffer<Instance>;
+pub type InstanceBuffer = VecGpuBuffer<Instance>;
 
-pub(crate) struct VecGpuBuffer<T: bytemuck::Pod> {
+pub struct VecGpuBuffer<T: bytemuck::Pod> {
     offset: u32,
     capacity: u32,
-    pub(crate) buffer: wgpu::Buffer,
+    pub buffer: wgpu::Buffer,
     usage: wgpu::BufferUsages,
     _phantom: std::marker::PhantomData<T>,
     label: &'static str,
@@ -20,7 +20,7 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
         size as u64 * size_of::<T>() as u64
     }
 
-    pub(crate) fn new(
+    pub fn new(
         capacity: u32,
         device: &wgpu::Device,
         usage: wgpu::BufferUsages,
@@ -45,7 +45,7 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
         self.offset = 0;
     }
 
-    pub(crate) fn push(
+    pub fn push(
         &mut self,
         instances: &[T],
         device: &wgpu::Device,
@@ -94,9 +94,9 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
     }
 }
 
-pub(crate) struct IndexBuffer {
+pub struct IndexBuffer {
     allocator: range_alloc::RangeAllocator<u32>,
-    pub(crate) buffer: wgpu::Buffer,
+    pub buffer: wgpu::Buffer,
 }
 
 impl IndexBuffer {
@@ -104,7 +104,7 @@ impl IndexBuffer {
         size as u64 * size_of::<u32>() as u64
     }
 
-    pub(crate) fn new(capacity: u32, device: &wgpu::Device) -> Self {
+    pub fn new(capacity: u32, device: &wgpu::Device) -> Self {
         Self {
             allocator: range_alloc::RangeAllocator::new(0..capacity),
             buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -190,11 +190,11 @@ impl IndexBuffer {
     }
 }
 
-pub(crate) struct VertexBuffers {
+pub struct VertexBuffers {
     allocator: range_alloc::RangeAllocator<u32>,
-    pub(crate) position: wgpu::Buffer,
-    pub(crate) normal: wgpu::Buffer,
-    pub(crate) uv: wgpu::Buffer,
+    pub position: wgpu::Buffer,
+    pub normal: wgpu::Buffer,
+    pub uv: wgpu::Buffer,
 }
 
 impl VertexBuffers {
@@ -218,7 +218,7 @@ impl VertexBuffers {
         })
     }
 
-    pub(crate) fn new(capacity: u32, device: &wgpu::Device) -> Self {
+    pub fn new(capacity: u32, device: &wgpu::Device) -> Self {
         Self {
             allocator: range_alloc::RangeAllocator::new(0..capacity),
             position: Self::create_buffer(device, "position buffer", capacity, size_of::<Vec3>()),
