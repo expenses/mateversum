@@ -41,7 +41,7 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.offset = 0;
     }
 
@@ -79,6 +79,13 @@ impl<T: bytemuck::Pod> VecGpuBuffer<T> {
         let copy_size = Self::size_in_bytes(self.offset);
 
         let new_capacity = required_capacity.max(self.capacity * 2);
+
+        log::info!(
+            "Growing {} from {} to {}",
+            self.label,
+            self.capacity,
+            new_capacity
+        );
 
         let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(self.label),

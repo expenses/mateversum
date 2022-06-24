@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub use renderer_core;
 
 use renderer_core::assets::models::Model;
+use renderer_core::glam::Vec3;
 
 pub struct Device(Arc<wgpu::Device>);
 pub struct Queue(Arc<wgpu::Queue>);
@@ -16,7 +17,11 @@ pub struct UniformBuffer(Arc<wgpu::Buffer>);
 pub struct MainBindGroup(Arc<parking_lot::Mutex<wgpu::BindGroup>>);
 pub struct SkyboxUniformBuffer(wgpu::Buffer);
 pub struct SkyboxUniformBindGroup(wgpu::BindGroup);
-pub struct TestModel(Arc<parking_lot::Mutex<Model>>);
+pub struct TestModel {
+    model: Arc<parking_lot::Mutex<Model>>,
+    instances: Vec<renderer_core::Instance>,
+    instance_range: Range<u32>,
+}
 pub struct TestModelBindGroup(wgpu::BindGroup);
 
 pub struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
@@ -29,6 +34,9 @@ pub struct IntermediateDepthFramebuffer(Option<renderer_core::Texture>);
 pub struct IntermediateColorFramebuffer(Option<renderer_core::Texture>);
 pub struct CompositeBindGroup(Option<wgpu::BindGroup>);
 pub struct LinearSampler(Arc<wgpu::Sampler>);
+
+#[derive(bevy_ecs::prelude::Component)]
+pub struct Instance(renderer_core::Instance);
 
 #[derive(bevy_ecs::prelude::StageLabel, Debug, PartialEq, Eq, Clone, Hash)]
 pub enum StartupStage {
@@ -51,8 +59,30 @@ impl Plugin for XrPlugin {
             StartupStage::BindGroupCreation,
             SystemStage::single_threaded().with_system(systems::allocate_bind_groups),
         );
+
+        app.add_system(systems::rotate_entities);
+
         app.add_system(systems::update_uniform_buffers);
+        app.add_system(systems::clear_instance_buffer);
+        app.add_system(systems::push_entity_instances);
+        app.add_system(systems::upload_instances);
         app.add_system(systems::render);
+
+        app.world
+            .spawn()
+            .insert(Instance(renderer_core::Instance::new(
+                Vec3::new(1.0, 1.0, -2.0),
+                1.0,
+                Default::default(),
+            )));
+
+        app.world
+            .spawn()
+            .insert(Instance(renderer_core::Instance::new(
+                Vec3::new(-1.0, 1.0, -2.0),
+                1.0,
+                Default::default(),
+            )));
     }
 }
 

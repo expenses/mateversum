@@ -1,14 +1,14 @@
 use crate::{
-    BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, InstanceBuffer,
+    BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, Instance, InstanceBuffer,
     IntermediateColorFramebuffer, IntermediateDepthFramebuffer, LinearSampler, MainBindGroup,
     Model, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, TestModel,
     TestModelBindGroup, UniformBuffer, VertexBuffers,
 };
-use bevy_ecs::prelude::{Commands, NonSend, Res, ResMut};
+use bevy_ecs::prelude::{Commands, NonSend, Query, Res, ResMut};
 use renderer_core::glam::{Vec3, Vec4};
 use renderer_core::{
     bytemuck, create_view_from_device_framebuffer, crevice::std140::AsStd140, shared_structs,
-    Instance, Texture,
+    Texture,
 };
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -37,6 +37,49 @@ pub fn create_bind_group_layouts_and_pipelines(
     commands.insert_resource(IntermediateColorFramebuffer(None));
     commands.insert_resource(IntermediateDepthFramebuffer(None));
     commands.insert_resource(CompositeBindGroup(None));
+}
+
+pub fn clear_instance_buffer(
+    mut instance_buffer: ResMut<InstanceBuffer>,
+    mut test_model: ResMut<TestModel>,
+) {
+    instance_buffer.0.clear();
+    test_model.instances.clear();
+}
+
+pub fn rotate_entities(mut instance_query: Query<&mut Instance>) {
+    for mut instance in instance_query.iter_mut() {
+        instance.0.rotation *= renderer_core::glam::Quat::from_rotation_y(0.01);
+    }
+}
+
+// Here would be a good place to do culling.
+pub fn push_entity_instances(instance_query: Query<&Instance>, mut test_model: ResMut<TestModel>) {
+    for instance in instance_query.iter() {
+        test_model.instances.push(instance.0);
+    }
+}
+
+pub fn upload_instances(
+    device: Res<Device>,
+    queue: Res<Queue>,
+    mut instance_buffer: ResMut<InstanceBuffer>,
+    mut test_model: ResMut<TestModel>,
+) {
+    let mut command_encoder = device
+        .0
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("command encoder"),
+        });
+
+    test_model.instance_range = instance_buffer.0.push(
+        &test_model.instances,
+        &device.0,
+        &queue.0,
+        &mut command_encoder,
+    );
+
+    queue.0.submit(std::iter::once(command_encoder.finish()));
 }
 
 pub fn allocate_bind_groups(
@@ -378,37 +421,20 @@ pub fn allocate_bind_groups(
         1024, &device,
     )));
 
-    let instance_buffer = {
-        let mut instance_buffer = renderer_core::InstanceBuffer::new(
-            1024,
-            &device,
-            wgpu::BufferUsages::VERTEX,
-            "instance buffer",
-        );
-
-        let mut command_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("command encoder"),
-        });
-
-        instance_buffer.push(
-            &[Instance::new(
-                Vec3::new(0.0, 1.0, -2.0),
-                1.0,
-                Default::default(),
-            )],
-            &device,
-            &queue,
-            &mut command_encoder,
-        );
-
-        queue.submit(std::iter::once(command_encoder.finish()));
-
-        instance_buffer
-    };
+    let instance_buffer = renderer_core::InstanceBuffer::new(
+        1,
+        &device,
+        wgpu::BufferUsages::VERTEX,
+        "instance buffer",
+    );
 
     let test_model = Arc::new(parking_lot::Mutex::new(Model::default()));
 
-    commands.insert_resource(TestModel(test_model.clone()));
+    commands.insert_resource(TestModel {
+        model: test_model.clone(),
+        instances: Vec::new(),
+        instance_range: 0..0,
+    });
     commands.insert_resource(IndexBuffer(index_buffer.clone()));
     commands.insert_resource(VertexBuffers(vertex_buffers.clone()));
     commands.insert_resource(InstanceBuffer(instance_buffer));
@@ -555,7 +581,7 @@ pub fn render(
     let main_bind_group = &main_bind_group.0.lock();
     let vertex_buffers = &vertex_buffers.0.lock();
     let index_buffer = &index_buffer.0.lock();
-    let test_model = &test_model.0.lock();
+    let test_model_inner = &test_model.model.lock();
 
     let xr_session: web_sys::XrSession = frame.session();
 
@@ -724,10 +750,14 @@ pub fn render(
 
         render_pass.set_pipeline(&pipelines.pbr.opaque);
         render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
-        for primitive_index in test_model.primitive_ranges.opaque.clone() {
-            let primitive = &test_model.primitives[primitive_index];
+        for primitive_index in test_model_inner.primitive_ranges.opaque.clone() {
+            let primitive = &test_model_inner.primitives[primitive_index];
 
-            render_pass.draw_indexed(primitive.index_buffer_range.clone(), 0, 0..1);
+            render_pass.draw_indexed(
+                primitive.index_buffer_range.clone(),
+                0,
+                test_model.instance_range.clone(),
+            );
         }
 
         render_pass.set_pipeline(&pipelines.skybox);
