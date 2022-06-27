@@ -17,8 +17,8 @@ type SampledImage = Image!(2D, type=f32, sampled);
 mod single_view;
 
 pub use single_view::{
-    fragment as _, fragment_alpha_clipped as _, tonemap as _, vertex as _,
-    vertex_mirrored as _, vertex_skybox as _, vertex_skybox_mirrored as _,
+    fragment as _, fragment_alpha_clipped as _, tonemap as _, vertex as _, vertex_mirrored as _,
+    vertex_skybox as _, vertex_skybox_mirrored as _,
 };
 
 #[spirv(vertex)]
@@ -144,7 +144,9 @@ pub fn fragment(
     );
 
     if material_settings.is_unlit != 0 {
-        *output = potentially_tonemap(material_params.base.albedo_colour, uniforms).extend(1.0);
+        // we don't want to use tonemapping for unlit materials.
+        *output = potentially_convert_linear_to_srgb(material_params.base.albedo_colour, uniforms)
+            .extend(1.0);
         return;
     }
 
@@ -242,7 +244,9 @@ pub fn fragment_alpha_clipped(
     }
 
     if material_settings.is_unlit != 0 {
-        *output = potentially_tonemap(material_params.base.albedo_colour, uniforms).extend(1.0);
+        // we don't want to use tonemapping for unlit materials.
+        *output = potentially_convert_linear_to_srgb(material_params.base.albedo_colour, uniforms)
+            .extend(1.0);
         return;
     }
 
@@ -429,6 +433,14 @@ fn aces_filmic(x: Vec3) -> Vec3 {
 fn tonemapping(hdr_linear: Vec3) -> Vec3 {
     let tonemapped_linear = aces_filmic(hdr_linear);
     linear_to_srgb_approx(tonemapped_linear)
+}
+
+fn potentially_convert_linear_to_srgb(mut output: Vec3, uniforms: &Uniforms) -> Vec3 {
+    if uniforms.inline_tonemapping != 0 {
+        output = linear_to_srgb_approx(output);
+    }
+
+    output
 }
 
 fn potentially_tonemap(mut output: Vec3, uniforms: &Uniforms) -> Vec3 {
