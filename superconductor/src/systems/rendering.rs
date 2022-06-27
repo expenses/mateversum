@@ -1,9 +1,10 @@
 use crate::*;
 
 use crate::components::{InstanceRange, Model};
-use crate::utils::BorrowedOrOwned;
-use bevy_ecs::prelude::{NonSend, Query, Res, ResMut};
+use bevy_ecs::prelude::{Local, NonSend, Query, Res, ResMut};
+use renderer_core::assets::models::PrimitiveRanges;
 use renderer_core::create_view_from_device_framebuffer;
+use renderer_core::utils::BorrowedOrOwned;
 
 pub fn render(
     frame: NonSend<web_sys::XrFrame>,
@@ -23,8 +24,8 @@ pub fn render(
         Res<VertexBuffers>,
         Res<InstanceBuffer>,
     ),
-    models: Query<(&Model, &InstanceRange)>,
-    test_model_bind_group: Res<TestModelBindGroup>,
+    mut models: Query<(&mut Model, &InstanceRange)>,
+    mut model_bind_groups: Local<ModelBindGroups>,
 ) {
     let device = &device.0;
     let queue = &queue.0;
@@ -160,6 +161,8 @@ pub fn render(
         }))
     };
 
+    model_bind_groups.collect(&mut models);
+
     let mut command_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("command encoder"),
     });
@@ -204,22 +207,40 @@ pub fn render(
 
         {
             render_pass.set_pipeline(&pipelines.pbr.opaque);
-            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
 
-            models.for_each(|(model, instance_range)| {
-                let model = &model.0;
-                let instance_range = instance_range.0.clone();
+            render_all_primitives(
+                &mut render_pass,
+                &models,
+                &model_bind_groups,
+                |primitive_ranges| primitive_ranges.opaque.clone(),
+            );
 
-                let opaque_primitives = &model.primitives[model.primitive_ranges.opaque.clone()];
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
 
-                for primitive in opaque_primitives {
-                    render_pass.draw_indexed(
-                        primitive.index_buffer_range.clone(),
-                        0,
-                        instance_range.clone(),
-                    );
-                }
-            })
+            render_all_primitives(
+                &mut render_pass,
+                &models,
+                &model_bind_groups,
+                |primitive_ranges| primitive_ranges.opaque_double_sided.clone(),
+            );
+
+            render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
+
+            render_all_primitives(
+                &mut render_pass,
+                &models,
+                &model_bind_groups,
+                |primitive_ranges| primitive_ranges.alpha_clipped.clone(),
+            );
+
+            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
+
+            render_all_primitives(
+                &mut render_pass,
+                &models,
+                &model_bind_groups,
+                |primitive_ranges| primitive_ranges.alpha_clipped_double_sided.clone(),
+            );
         }
 
         render_pass.set_pipeline(&pipelines.skybox);
@@ -254,4 +275,72 @@ pub fn render(
     }
 
     queue.submit(std::iter::once(command_encoder.finish()));
+}
+
+// The model bind groups for the current frame
+#[derive(Default)]
+pub struct ModelBindGroups {
+    bind_groups: Vec<Arc<wgpu::BindGroup>>,
+    // We use a `Vec` of offsets here to avoid needing a `Vec<Vec<Arc<wgpu::BindGroup>>>`
+    // This means we can just clear the `Vec`s instead of re-allocating.
+    offsets: Vec<usize>,
+}
+
+impl ModelBindGroups {
+    fn collect(&mut self, query: &mut Query<(&mut Model, &InstanceRange)>) {
+        self.bind_groups.clear();
+        self.offsets.clear();
+
+        // This is mutable because it involves potentially swapping out the dummy bind groups
+        // for loaded ones.
+        query.for_each_mut(|(mut model, _)| {
+            self.offsets.push(self.bind_groups.len());
+
+            // Todo: we could do a check if the model has any instances here
+            // and not write the bind groups if not, which would mean that we don't have to do a check
+            // however many times we do a `render_all_primitives` call. But that'd be less clear and
+            // I'm not sure if it's worthwhile.
+            self.bind_groups.extend(
+                model
+                    .0
+                    .primitives
+                    .iter_mut()
+                    .map(|primitive| primitive.bind_group.get().clone()),
+            );
+        })
+    }
+
+    fn bind_groups_for_model(&self, model_index: usize) -> &[Arc<wgpu::BindGroup>] {
+        &self.bind_groups[self.offsets[model_index]..]
+    }
+}
+
+fn render_all_primitives<'a, G: Fn(&PrimitiveRanges) -> Range<usize>>(
+    render_pass: &mut wgpu::RenderPass<'a>,
+    models: &Query<(&mut Model, &InstanceRange)>,
+    model_bind_groups: &'a ModelBindGroups,
+    primitive_range_getter: G,
+) {
+    for (model_index, (model, instance_range)) in models.iter().enumerate() {
+        // Don't issue commands for models with no (visible) instances.
+        if !instance_range.0.is_empty() {
+            // Get the range of primtives we're rendering
+            let range = primitive_range_getter(&model.0.primitive_ranges);
+
+            // Get the primitives we're rendering
+            let primitives = &model.0.primitives[range.clone()];
+            // And their associated material bind groups
+            let bind_groups = &model_bind_groups.bind_groups_for_model(model_index)[range];
+
+            for (primitive, bind_group) in primitives.iter().zip(bind_groups) {
+                render_pass.set_bind_group(1, bind_group, &[]);
+
+                render_pass.draw_indexed(
+                    primitive.index_buffer_range.clone(),
+                    0,
+                    instance_range.0.clone(),
+                );
+            }
+        }
+    }
 }

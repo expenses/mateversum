@@ -144,7 +144,7 @@ pub fn fragment(
     );
 
     if material_settings.is_unlit != 0 {
-        *output = material_params.base.albedo_colour.extend(1.0);
+        *output = potentially_tonemap(material_params.base.albedo_colour, uniforms).extend(1.0);
         return;
     }
 
@@ -187,13 +187,9 @@ pub fn fragment(
         },
     );
 
-    let mut combined_output = diffuse_output + specular_output + material_params.emission;
+    let combined_output = diffuse_output + specular_output + material_params.emission;
 
-    if uniforms.inline_tonemapping != 0 {
-        combined_output = tonemapping(combined_output);
-    }
-
-    *output = combined_output.extend(1.0);
+    *output = potentially_tonemap(combined_output, uniforms).extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -246,7 +242,7 @@ pub fn fragment_alpha_clipped(
     }
 
     if material_settings.is_unlit != 0 {
-        *output = material_params.base.albedo_colour.extend(1.0);
+        *output = potentially_tonemap(material_params.base.albedo_colour, uniforms).extend(1.0);
         return;
     }
 
@@ -284,13 +280,9 @@ pub fn fragment_alpha_clipped(
         },
     );
 
-    let mut combined_output = diffuse_output + specular_output + material_params.emission;
+    let combined_output = diffuse_output + specular_output + material_params.emission;
 
-    if uniforms.inline_tonemapping != 0 {
-        combined_output = tonemapping(combined_output);
-    }
-
-    *output = combined_output.extend(1.0);
+    *output = potentially_tonemap(combined_output, uniforms).extend(1.0);
 }
 
 #[spirv(fragment)]
@@ -305,13 +297,7 @@ pub fn fragment_ui(
 ) {
     let sample = TextureSampler::new(texture, *sampler, uv).sample();
 
-    let mut colour_output = sample.truncate();
-
-    if uniforms.inline_tonemapping != 0 {
-        colour_output = tonemapping(colour_output);
-    }
-
-    *output = colour_output.extend(sample.w);
+    *output = potentially_tonemap(sample.truncate(), uniforms).extend(sample.w);
 }
 
 fn linear_to_srgb_approx(color_linear: Vec3) -> Vec3 {
@@ -445,6 +431,14 @@ fn tonemapping(hdr_linear: Vec3) -> Vec3 {
     linear_to_srgb_approx(tonemapped_linear)
 }
 
+fn potentially_tonemap(mut output: Vec3, uniforms: &Uniforms) -> Vec3 {
+    if uniforms.inline_tonemapping != 0 {
+        output = tonemapping(output);
+    }
+
+    output
+}
+
 #[spirv(fragment)]
 pub fn tonemap(
     uv: Vec2,
@@ -540,11 +534,5 @@ pub fn fragment_skybox(
 ) {
     let sample: Vec4 = specular_ibl_cubemap.sample_by_lod(*sampler, ray, 0.0);
 
-    let mut skybox_output = sample.truncate();
-
-    if uniforms.inline_tonemapping != 0 {
-        skybox_output = tonemapping(skybox_output);
-    }
-
-    *output = skybox_output.extend(1.0);
+    *output = potentially_tonemap(sample.truncate(), uniforms).extend(1.0);
 }

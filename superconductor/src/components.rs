@@ -1,6 +1,6 @@
-use crate::utils::Setter;
 use bevy_ecs::prelude::{Component, Entity};
 use renderer_core::assets::models;
+use renderer_core::utils::Setter;
 use std::ops::Range;
 
 #[derive(Component)]

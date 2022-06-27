@@ -6,6 +6,7 @@ pub struct BindGroupLayouts {
     pub ui_texture: wgpu::BindGroupLayout,
     pub skybox: wgpu::BindGroupLayout,
     pub uint_texture: wgpu::BindGroupLayout,
+    pub sampled_texture: wgpu::BindGroupLayout,
 }
 
 impl BindGroupLayouts {
@@ -123,6 +124,10 @@ impl BindGroupLayouts {
             uint_texture: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("uint texture bind group layout"),
                 entries: &[uint_texture_entry(0)],
+            }),
+            sampled_texture: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("sampled texture bind group layout"),
+                entries: &[sampler_entry(0), texture_entry(1)],
             }),
         }
     }

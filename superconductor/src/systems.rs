@@ -1,18 +1,16 @@
 use crate::components::{
     Instance, InstanceOf, InstanceRange, Instances, Model, ModelUrl, PendingModel,
 };
-use crate::utils::Setter;
 use crate::{
     BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, InstanceBuffer,
     IntermediateColorFramebuffer, IntermediateDepthFramebuffer, LinearSampler, MainBindGroup,
-    ModelUrls, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, TestModelBindGroup,
-    UniformBuffer, VertexBuffers,
+    ModelUrls, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, UniformBuffer,
+    VertexBuffers,
 };
 use bevy_ecs::prelude::{Added, Commands, Entity, NonSend, Query, Res, ResMut};
-use renderer_core::glam::{Vec3, Vec4};
+use renderer_core::utils::Setter;
 use renderer_core::{bytemuck, crevice::std140::AsStd140, shared_structs, Texture};
 use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 pub(crate) mod rendering;
 
@@ -25,15 +23,7 @@ pub fn create_bind_group_layouts_and_pipelines(
 
     let bind_group_layouts = renderer_core::BindGroupLayouts::new(&device, &pipeline_options);
 
-    // todo: this probably only gives very minimal gains.
-    let shader_cache: renderer_core::ResourceCache<wgpu::ShaderModule> = Default::default();
-
-    let pipelines = renderer_core::Pipelines::new(
-        &device,
-        &shader_cache,
-        &bind_group_layouts,
-        &pipeline_options,
-    );
+    let pipelines = renderer_core::Pipelines::new(&device, &bind_group_layouts, &pipeline_options);
 
     commands.insert_resource(BindGroupLayouts(Arc::new(bind_group_layouts)));
     commands.insert_resource(Pipelines(Arc::new(pipelines)));
@@ -309,118 +299,6 @@ pub fn allocate_bind_groups(
         }
     });
 
-    fn load_single_pixel_image(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        bytes: &[u8; 4],
-    ) -> Texture {
-        Texture::new(device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: None,
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            },
-            bytes,
-        ))
-    }
-
-    let black_image = load_single_pixel_image(
-        &*device,
-        &queue,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
-        &[0, 0, 0, 255],
-    );
-    let default_metallic_roughness_image = load_single_pixel_image(
-        &*device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        &[0, 255, 0, 255],
-    );
-    let flat_normals_image = load_single_pixel_image(
-        &*device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        &[127, 127, 255, 255],
-    );
-    let white_image = load_single_pixel_image(
-        &*device,
-        &queue,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
-        &[255, 255, 255, 255],
-    );
-
-    let material_settings = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("material settings"),
-        contents: bytemuck::bytes_of(
-            &shared_structs::MaterialSettings {
-                base_color_factor: Vec4::ONE,
-                emissive_factor: Vec3::ZERO,
-                metallic_factor: 0.0,
-                roughness_factor: 1.0,
-                is_unlit: false as u32,
-            }
-            .as_std140(),
-        ),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-
-    commands.insert_resource(TestModelBindGroup(device.create_bind_group(
-        &wgpu::BindGroupDescriptor {
-            label: Some("test model bind group"),
-            layout: &bind_group_layouts.model,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&white_image.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&flat_normals_image.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &default_metallic_roughness_image.view,
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&black_image.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: material_settings.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
-                },
-            ],
-        },
-    )));
-
     let index_buffer = Arc::new(parking_lot::Mutex::new(renderer_core::IndexBuffer::new(
         1024, &device,
     )));
@@ -519,6 +397,8 @@ pub fn start_loading_models(
     query: Query<(Entity, &ModelUrl), Added<ModelUrl>>,
     device: Res<Device>,
     queue: Res<Queue>,
+    pipelines: Res<Pipelines>,
+    bind_group_layouts: Res<BindGroupLayouts>,
     (index_buffer, vertex_buffers): (Res<IndexBuffer>, Res<VertexBuffers>),
     mut model_urls: ResMut<ModelUrls>,
     mut commands: Commands,
@@ -543,15 +423,19 @@ pub fn start_loading_models(
         wasm_bindgen_futures::spawn_local({
             let device = device.clone();
             let queue = queue.clone();
+            let bind_group_layouts = bind_group_layouts.0.clone();
+            let pipelines = pipelines.0.clone();
 
             async move {
                 let result = renderer_core::assets::models::Model::load(
                     &renderer_core::assets::models::Context {
                         device,
                         queue,
+                        bind_group_layouts,
                         http_client: super::SimpleHttpClient,
                         index_buffer,
                         vertex_buffers,
+                        pipelines,
                     },
                     &url,
                 )
@@ -560,7 +444,8 @@ pub fn start_loading_models(
                 match result {
                     Err(error) => {
                         log::error!(
-                            "Got an error while trying to load the test model: {}",
+                            "Got an error while trying to load a model from '{}': {}",
+                            url,
                             error
                         );
                     }
