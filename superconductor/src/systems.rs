@@ -1,17 +1,20 @@
+use crate::components::{
+    Instance, InstanceOf, InstanceRange, Instances, Model, ModelUrl, PendingModel,
+};
+use crate::utils::Setter;
 use crate::{
-    BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, Instance, InstanceBuffer,
+    BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, InstanceBuffer,
     IntermediateColorFramebuffer, IntermediateDepthFramebuffer, LinearSampler, MainBindGroup,
-    Model, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, TestModel,
-    TestModelBindGroup, TestModelUrl, UniformBuffer, VertexBuffers,
+    ModelUrls, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, TestModelBindGroup,
+    UniformBuffer, VertexBuffers,
 };
-use bevy_ecs::prelude::{Commands, NonSend, Query, Res, ResMut};
+use bevy_ecs::prelude::{Added, Commands, Entity, NonSend, Query, Res, ResMut};
 use renderer_core::glam::{Vec3, Vec4};
-use renderer_core::{
-    bytemuck, create_view_from_device_framebuffer, crevice::std140::AsStd140, shared_structs,
-    Texture,
-};
+use renderer_core::{bytemuck, crevice::std140::AsStd140, shared_structs, Texture};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
+
+pub(crate) mod rendering;
 
 pub fn create_bind_group_layouts_and_pipelines(
     device: Res<Device>,
@@ -41,30 +44,35 @@ pub fn create_bind_group_layouts_and_pipelines(
 
 pub fn clear_instance_buffer(
     mut instance_buffer: ResMut<InstanceBuffer>,
-    mut test_model: ResMut<TestModel>,
+    mut query: Query<&mut Instances>,
 ) {
     instance_buffer.0.clear();
-    test_model.instances.clear();
-}
 
-pub fn rotate_entities(mut instance_query: Query<&mut Instance>) {
-    for mut instance in instance_query.iter_mut() {
-        instance.0.rotation *= renderer_core::glam::Quat::from_rotation_y(0.01);
-    }
+    query.for_each_mut(|mut instances| instances.0.clear());
 }
 
 // Here would be a good place to do culling.
-pub fn push_entity_instances(instance_query: Query<&Instance>, mut test_model: ResMut<TestModel>) {
-    for instance in instance_query.iter() {
-        test_model.instances.push(instance.0);
-    }
+pub fn push_entity_instances(
+    mut instance_query: Query<(&InstanceOf, &Instance)>,
+    mut model_query: Query<&mut Instances>,
+) {
+    instance_query.for_each_mut(|(instance_of, instance)| {
+        match model_query.get_mut(instance_of.0) {
+            Ok(mut instances) => {
+                instances.0.push(instance.0);
+            }
+            Err(error) => {
+                log::warn!("Got an error when pushing an instance: {}", error);
+            }
+        }
+    })
 }
 
 pub fn upload_instances(
     device: Res<Device>,
     queue: Res<Queue>,
     mut instance_buffer: ResMut<InstanceBuffer>,
-    mut test_model: ResMut<TestModel>,
+    mut query: Query<(&Instances, &mut InstanceRange)>,
 ) {
     let mut command_encoder = device
         .0
@@ -72,12 +80,12 @@ pub fn upload_instances(
             label: Some("command encoder"),
         });
 
-    test_model.instance_range = instance_buffer.0.push(
-        &test_model.instances,
-        &device.0,
-        &queue.0,
-        &mut command_encoder,
-    );
+    query.for_each_mut(|(instances, mut instance_range)| {
+        instance_range.0 =
+            instance_buffer
+                .0
+                .push(&instances.0, &device.0, &queue.0, &mut command_encoder);
+    });
 
     queue.0.submit(std::iter::once(command_encoder.finish()));
 }
@@ -87,7 +95,6 @@ pub fn allocate_bind_groups(
     queue: Res<Queue>,
     pipelines: Res<Pipelines>,
     bind_group_layouts: Res<BindGroupLayouts>,
-    test_model_url: Res<TestModelUrl>,
     mut commands: Commands,
 ) {
     let device = &device.0;
@@ -429,49 +436,9 @@ pub fn allocate_bind_groups(
         "instance buffer",
     );
 
-    let test_model = Arc::new(parking_lot::Mutex::new(Model::default()));
-
-    commands.insert_resource(TestModel {
-        model: test_model.clone(),
-        instances: Vec::new(),
-        instance_range: 0..0,
-    });
     commands.insert_resource(IndexBuffer(index_buffer.clone()));
     commands.insert_resource(VertexBuffers(vertex_buffers.clone()));
     commands.insert_resource(InstanceBuffer(instance_buffer));
-
-    wasm_bindgen_futures::spawn_local({
-        let url = test_model_url.0.clone();
-
-        let device = device.clone();
-        let queue = queue.clone();
-
-        async move {
-            let result = renderer_core::assets::models::Model::load(
-                &renderer_core::assets::models::Context {
-                    device,
-                    queue,
-                    http_client: super::SimpleHttpClient,
-                    index_buffer,
-                    vertex_buffers,
-                },
-                &url,
-            )
-            .await;
-
-            match result {
-                Err(error) => {
-                    log::error!(
-                        "Got an error while trying to load the test model: {}",
-                        error
-                    );
-                }
-                Ok(model) => {
-                    *test_model.lock() = model;
-                }
-            }
-        }
-    })
 }
 
 pub fn update_uniform_buffers(
@@ -548,308 +515,70 @@ pub fn update_uniform_buffers(
     );
 }
 
-pub fn render(
-    frame: NonSend<web_sys::XrFrame>,
+pub fn start_loading_models(
+    query: Query<(Entity, &ModelUrl), Added<ModelUrl>>,
     device: Res<Device>,
     queue: Res<Queue>,
-    pipelines: Res<Pipelines>,
-    bind_group_layouts: Res<BindGroupLayouts>,
-    main_bind_group: Res<MainBindGroup>,
-    skybox_uniform_bind_group: Res<SkyboxUniformBindGroup>,
-    mut intermediate_color_framebuffer: ResMut<IntermediateColorFramebuffer>,
-    mut intermediate_depth_framebuffer: ResMut<IntermediateDepthFramebuffer>,
-    mut composite_bind_group: ResMut<CompositeBindGroup>,
-    pipeline_options: Res<renderer_core::PipelineOptions>,
-    linear_sampler: Res<LinearSampler>,
-    (index_buffer, vertex_buffers, instance_buffer): (
-        Res<IndexBuffer>,
-        Res<VertexBuffers>,
-        Res<InstanceBuffer>,
-    ),
-    test_model: Res<TestModel>,
-    test_model_bind_group: Res<TestModelBindGroup>,
+    (index_buffer, vertex_buffers): (Res<IndexBuffer>, Res<VertexBuffers>),
+    mut model_urls: ResMut<ModelUrls>,
+    mut commands: Commands,
 ) {
     let device = &device.0;
     let queue = &queue.0;
-    let pipelines = &pipelines.0;
-    let bind_group_layouts = &bind_group_layouts.0;
 
-    // These `.lock`s looks scary, but it will never actually block (in wasm)
-    // because that would panic the main thread otherwise!
-    let main_bind_group = &main_bind_group.0.lock();
-    let vertex_buffers = &vertex_buffers.0.lock();
-    let index_buffer = &index_buffer.0.lock();
-    let test_model_inner = &test_model.model.lock();
+    query.for_each(|(entity, url)| {
+        let url = url.0.clone();
+        let vertex_buffers = vertex_buffers.0.clone();
+        let index_buffer = index_buffer.0.clone();
 
-    let xr_session: web_sys::XrSession = frame.session();
+        let model_setter = Setter(Default::default());
 
-    let base_layer = xr_session.render_state().base_layer().unwrap();
+        commands
+            .entity(entity)
+            .insert(PendingModel(model_setter.clone()));
 
-    let framebuffer: web_sys::WebGlFramebuffer =
-        js_sys::Reflect::get(&base_layer, &"framebuffer".into())
-            .unwrap()
-            .into();
+        // Insert a link back from the url to the entity for lookups.
+        model_urls.0.insert(url.clone(), entity);
 
-    let framebuffer_colour_attachment = create_view_from_device_framebuffer(
-        &device,
-        framebuffer.clone(),
-        &base_layer,
-        wgpu::TextureFormat::Rgba8Unorm,
-        "device framebuffer (colour)",
-    );
+        wasm_bindgen_futures::spawn_local({
+            let device = device.clone();
+            let queue = queue.clone();
 
-    let num_views = pipeline_options
-        .multiview
-        .map(|views| views.get())
-        .unwrap_or(1);
+            async move {
+                let result = renderer_core::assets::models::Model::load(
+                    &renderer_core::assets::models::Context {
+                        device,
+                        queue,
+                        http_client: super::SimpleHttpClient,
+                        index_buffer,
+                        vertex_buffers,
+                    },
+                    &url,
+                )
+                .await;
 
-    let (intermediate_color_framebuffer, composite_bind_group) =
-        if pipeline_options.render_direct_to_framebuffer() {
-            (None, None)
-        } else {
-            let intermediate_color_framebuffer =
-                intermediate_color_framebuffer.0.get_or_insert_with(|| {
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("intermediate color framebuffer"),
-                        size: wgpu::Extent3d {
-                            width: base_layer.framebuffer_width() / num_views,
-                            height: base_layer.framebuffer_height(),
-                            depth_or_array_layers: num_views,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        // Always true at the moment.
-                        format: if pipeline_options.inline_tonemapping {
-                            wgpu::TextureFormat::Rgba8Unorm
-                        } else {
-                            wgpu::TextureFormat::Rgba16Float
-                        },
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING
-                            | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    });
-
-                    let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                        dimension: Some(if pipeline_options.multiview.is_none() {
-                            wgpu::TextureViewDimension::D2
-                        } else {
-                            wgpu::TextureViewDimension::D2Array
-                        }),
-                        ..Default::default()
-                    });
-
-                    renderer_core::Texture { texture, view }
-                });
-
-            let composite_bind_group = composite_bind_group.0.get_or_insert_with(|| {
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("composite bind group"),
-                    layout: &bind_group_layouts.tonemap,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::Sampler(&linear_sampler.0),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(
-                                &intermediate_color_framebuffer.view,
-                            ),
-                        },
-                    ],
-                })
-            });
-
-            (
-                Some(intermediate_color_framebuffer),
-                Some(composite_bind_group),
-            )
-        };
-
-    let depth_attachment = if pipeline_options.render_direct_to_framebuffer() {
-        BorrowedOrOwned::Owned(create_view_from_device_framebuffer(
-            &device,
-            framebuffer.clone(),
-            &base_layer,
-            wgpu::TextureFormat::Depth24PlusStencil8,
-            "device framebuffer (depth)",
-        ))
-    } else {
-        BorrowedOrOwned::Borrowed(intermediate_depth_framebuffer.0.get_or_insert_with(|| {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("intermediate depth framebuffer"),
-                size: wgpu::Extent3d {
-                    width: base_layer.framebuffer_width() / num_views,
-                    height: base_layer.framebuffer_height(),
-                    depth_or_array_layers: num_views,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth24PlusStencil8,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            });
-
-            let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(if pipeline_options.multiview.is_none() {
-                    wgpu::TextureViewDimension::D2
-                } else {
-                    wgpu::TextureViewDimension::D2Array
-                }),
-                ..Default::default()
-            });
-
-            renderer_core::Texture { texture, view }
-        }))
-    };
-
-    let mut command_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("command encoder"),
-    });
-
-    let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("main render pass"),
-        color_attachments: &[wgpu::RenderPassColorAttachment {
-            view: if let Some(intermediate_color_framebuffer) = intermediate_color_framebuffer {
-                &intermediate_color_framebuffer.view
-            } else {
-                &framebuffer_colour_attachment.view
-            },
-            resolve_target: None,
-            ops: wgpu::Operations {
-                // Note: when rendering to a Quest 2, clearing the intermediate framebuffer
-                // makes the skybox only render on one eye! No clue why.
-                load: wgpu::LoadOp::Load,
-                store: true,
-            },
-        }],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: &depth_attachment.borrow().view,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(1.0),
-                store: true,
-            }),
-            stencil_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(0),
-                store: true,
-            }),
-        }),
-    });
-
-    {
-        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
-        render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
-        render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
-        render_pass.set_vertex_buffer(3, instance_buffer.0.buffer.slice(..));
-
-        render_pass.set_bind_group(0, &main_bind_group, &[]);
-
-        {
-            render_pass.set_pipeline(&pipelines.pbr.opaque);
-            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
-            for primitive_index in test_model_inner.primitive_ranges.opaque.clone() {
-                let primitive = &test_model_inner.primitives[primitive_index];
-
-                render_pass.draw_indexed(
-                    primitive.index_buffer_range.clone(),
-                    0,
-                    test_model.instance_range.clone(),
-                );
+                match result {
+                    Err(error) => {
+                        log::error!(
+                            "Got an error while trying to load the test model: {}",
+                            error
+                        );
+                    }
+                    Ok(model) => {
+                        model_setter.set(model);
+                    }
+                }
             }
-
-            render_pass.set_pipeline(&pipelines.pbr_double_sided.opaque);
-            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
-            for primitive_index in test_model_inner
-                .primitive_ranges
-                .opaque_double_sided
-                .clone()
-            {
-                let primitive = &test_model_inner.primitives[primitive_index];
-
-                render_pass.draw_indexed(
-                    primitive.index_buffer_range.clone(),
-                    0,
-                    test_model.instance_range.clone(),
-                );
-            }
-
-            render_pass.set_pipeline(&pipelines.pbr.alpha_clipped);
-            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
-            for primitive_index in test_model_inner.primitive_ranges.alpha_clipped.clone() {
-                let primitive = &test_model_inner.primitives[primitive_index];
-
-                render_pass.draw_indexed(
-                    primitive.index_buffer_range.clone(),
-                    0,
-                    test_model.instance_range.clone(),
-                );
-            }
-
-            render_pass.set_pipeline(&pipelines.pbr_double_sided.alpha_clipped);
-            render_pass.set_bind_group(1, &test_model_bind_group.0, &[]);
-            for primitive_index in test_model_inner
-                .primitive_ranges
-                .alpha_clipped_double_sided
-                .clone()
-            {
-                let primitive = &test_model_inner.primitives[primitive_index];
-
-                render_pass.draw_indexed(
-                    primitive.index_buffer_range.clone(),
-                    0,
-                    test_model.instance_range.clone(),
-                );
-            }
-        }
-
-        render_pass.set_pipeline(&pipelines.skybox);
-        render_pass.set_bind_group(1, &skybox_uniform_bind_group.0, &[]);
-        render_pass.draw(0..3, 0..1);
-    }
-
-    drop(render_pass);
-
-    if let Some(composite_bind_group) = composite_bind_group {
-        let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("composite render pass"),
-            color_attachments: &[wgpu::RenderPassColorAttachment {
-                view: &framebuffer_colour_attachment.view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: true,
-                },
-            }],
-            depth_stencil_attachment: None,
-        });
-
-        render_pass.set_pipeline(&pipelines.tonemap);
-
-        render_pass.set_bind_group(0, &main_bind_group, &[]);
-        render_pass.set_bind_group(1, composite_bind_group, &[]);
-
-        render_pass.draw(0..3, 0..1);
-
-        drop(render_pass);
-    }
-
-    queue.submit(std::iter::once(command_encoder.finish()));
+        })
+    })
 }
 
-// std::borrow::Cow has too many type restrictions to use instead of this.
-// There's probably something in the std library that does the same thing tho?
-enum BorrowedOrOwned<'a, T> {
-    Owned(T),
-    Borrowed(&'a T),
-}
-
-impl<'a, T> BorrowedOrOwned<'a, T> {
-    fn borrow(&'a self) -> &'a T {
-        match self {
-            Self::Owned(value) => &value,
-            Self::Borrowed(reference) => reference,
+pub fn finish_loading_models(query: Query<(Entity, &PendingModel)>, mut commands: Commands) {
+    query.for_each(|(entity, pending_model)| {
+        if let Some(mut lock) = pending_model.0 .0.try_lock() {
+            if let Some(loaded_model) = lock.take() {
+                commands.entity(entity).insert(Model(loaded_model));
+            }
         }
-    }
+    })
 }

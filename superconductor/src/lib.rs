@@ -1,14 +1,20 @@
 use bevy_app::{App, Plugin};
-use bevy_ecs::prelude::SystemStage;
+use bevy_ecs::prelude::{Entity, SystemStage};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
+pub mod components;
+mod utils;
+
 pub use bevy_app;
+pub use bevy_ecs;
 pub use renderer_core;
 pub use url;
 
-use renderer_core::assets::models::Model;
-use renderer_core::glam::Vec3;
+pub use renderer_core::glam::Vec3;
+
+use components::Instance;
 
 pub struct Device(Arc<wgpu::Device>);
 pub struct Queue(Arc<wgpu::Queue>);
@@ -20,13 +26,6 @@ pub struct MainBindGroup(Arc<parking_lot::Mutex<wgpu::BindGroup>>);
 pub struct SkyboxUniformBuffer(wgpu::Buffer);
 pub struct SkyboxUniformBindGroup(wgpu::BindGroup);
 
-pub struct TestModelUrl(pub url::Url);
-
-pub struct TestModel {
-    model: Arc<parking_lot::Mutex<Model>>,
-    instances: Vec<renderer_core::Instance>,
-    instance_range: Range<u32>,
-}
 pub struct TestModelBindGroup(wgpu::BindGroup);
 
 pub struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
@@ -40,8 +39,7 @@ pub struct IntermediateColorFramebuffer(Option<renderer_core::Texture>);
 pub struct CompositeBindGroup(Option<wgpu::BindGroup>);
 pub struct LinearSampler(Arc<wgpu::Sampler>);
 
-#[derive(bevy_ecs::prelude::Component)]
-pub struct Instance(renderer_core::Instance);
+pub struct ModelUrls(pub HashMap<url::Url, Entity>);
 
 #[derive(bevy_ecs::prelude::StageLabel, Debug, PartialEq, Eq, Clone, Hash)]
 pub enum StartupStage {
@@ -54,6 +52,8 @@ pub struct XrPlugin;
 
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(ModelUrls(Default::default()));
+
         app.add_startup_stage(
             StartupStage::PipelineCreation,
             SystemStage::single_threaded()
@@ -65,13 +65,14 @@ impl Plugin for XrPlugin {
             SystemStage::single_threaded().with_system(systems::allocate_bind_groups),
         );
 
-        app.add_system(systems::rotate_entities);
+        app.add_system(systems::start_loading_models);
+        app.add_system(systems::finish_loading_models);
 
         app.add_system(systems::update_uniform_buffers);
         app.add_system(systems::clear_instance_buffer);
         app.add_system(systems::push_entity_instances);
         app.add_system(systems::upload_instances);
-        app.add_system(systems::render);
+        app.add_system(systems::rendering::render);
 
         app.world
             .spawn()
