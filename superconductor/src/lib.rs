@@ -5,7 +5,6 @@ use std::ops::Range;
 use std::sync::Arc;
 
 pub mod components;
-mod utils;
 
 pub use bevy_app;
 pub use bevy_ecs;
@@ -25,8 +24,6 @@ pub struct UniformBuffer(Arc<wgpu::Buffer>);
 pub struct MainBindGroup(Arc<parking_lot::Mutex<wgpu::BindGroup>>);
 pub struct SkyboxUniformBuffer(wgpu::Buffer);
 pub struct SkyboxUniformBindGroup(wgpu::BindGroup);
-
-pub struct TestModelBindGroup(wgpu::BindGroup);
 
 pub struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
 pub struct VertexBuffers(Arc<parking_lot::Mutex<renderer_core::VertexBuffers>>);

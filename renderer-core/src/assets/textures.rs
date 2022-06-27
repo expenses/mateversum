@@ -1,11 +1,13 @@
 use super::HttpClient;
 use crate::Texture;
+use std::borrow::Cow;
 use std::io::Read;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-pub struct Context<T: HttpClient + 'static> {
+#[derive(Clone)]
+pub struct Context<T> {
     pub pipelines: Arc<crate::Pipelines>,
     pub bind_group_layouts: Arc<crate::BindGroupLayouts>,
     pub device: Arc<wgpu::Device>,
@@ -299,4 +301,252 @@ fn write_bytes_to_texture(
         },
         mip_physical,
     );
+}
+
+pub(super) enum ImageSource<'a> {
+    Url(url::Url),
+    Bytes(&'a [u8]),
+}
+
+impl<'a> ImageSource<'a> {
+    async fn get_bytes<T: HttpClient>(&self, http_client: &T) -> anyhow::Result<Cow<'a, [u8]>> {
+        Ok(match self {
+            Self::Url(url) => Cow::Owned(http_client.fetch_bytes(url, None).await?),
+            Self::Bytes(bytes) => Cow::Borrowed(bytes),
+        })
+    }
+
+    fn extension(&self) -> Option<&str> {
+        match &self {
+            ImageSource::Url(url) => Some(url.path_segments()?.last()?.rsplit_once('.')?.1),
+            ImageSource::Bytes(_) => None,
+        }
+    }
+}
+
+pub(super) async fn load_image_with_mime_type<T: HttpClient + 'static>(
+    source: ImageSource<'_>,
+    srgb: bool,
+    mime_type: Option<&str>,
+    context: &Context<T>,
+) -> anyhow::Result<Arc<Texture>> {
+    match (mime_type, source.extension()) {
+        (Some("image/ktx2"), _) | (_, Some("ktx2")) => {
+            Err(anyhow::anyhow!("ktx2 loading not yet implemented"))
+        }
+        _ => load_image_crate_image(
+            &source.get_bytes(&context.http_client).await?,
+            srgb,
+            context,
+        ),
+    }
+}
+
+fn load_image_crate_image<T>(
+    bytes: &[u8],
+    srgb: bool,
+    context: &Context<T>,
+) -> anyhow::Result<Arc<Texture>> {
+    let image = image::load_from_memory(bytes)?;
+    let image = image.to_rgba8();
+
+    let mip_level_count = mip_levels_for_image_size(image.width(), image.height());
+
+    let format = if srgb {
+        wgpu::TextureFormat::Rgba8UnormSrgb
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    };
+
+    let texture = Texture::new(create_texture_with_first_mip_data(
+        &context.device,
+        &context.queue,
+        &wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: image.width(),
+                height: image.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        },
+        &*image,
+    ));
+
+    let temp_blit_textures: Vec<_> = (1..mip_level_count)
+        .map(|level| {
+            let mip_extent = wgpu::Extent3d {
+                width: (image.width() >> level).max(1),
+                height: (image.height() >> level).max(1),
+                depth_or_array_layers: 1,
+            };
+
+            Texture::new(context.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: mip_extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+            }))
+        })
+        .collect();
+
+    let source_view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
+        mip_level_count: Some(std::num::NonZeroU32::new(1).unwrap()),
+        ..Default::default()
+    });
+
+    let sampler = context.device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        anisotropy_clamp: None,
+        ..Default::default()
+    });
+
+    let mut encoder = context
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("command encoder"),
+        });
+
+    for source_level in 0..mip_level_count - 1 {
+        let bind_group = context
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &context.bind_group_layouts.sampled_texture,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(if source_level == 0 {
+                            &source_view
+                        } else {
+                            &temp_blit_textures[source_level as usize - 1].view
+                        }),
+                    },
+                ],
+            });
+
+        let temp_blit_texture = &temp_blit_textures[source_level as usize];
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("blit render pass"),
+            color_attachments: &[wgpu::RenderPassColorAttachment {
+                view: &temp_blit_texture.view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: None,
+        });
+
+        render_pass.set_pipeline(if srgb {
+            &context.pipelines.srgb_blit
+        } else {
+            &context.pipelines.blit
+        });
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.draw(0..3, 0..1);
+
+        drop(render_pass);
+
+        let target_level = source_level + 1;
+
+        encoder.copy_texture_to_texture(
+            wgpu::ImageCopyTexture {
+                texture: &temp_blit_texture.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyTexture {
+                texture: &texture.texture,
+                mip_level: source_level + 1,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: image.width() >> target_level,
+                height: image.height() >> target_level,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    context.queue.submit(std::iter::once(encoder.finish()));
+
+    Ok(Arc::new(texture))
+}
+
+// Like the following, except without trying to write subsequent mips.
+// https://github.com/gfx-rs/wgpu/blob/0b61a191244da0f0d987d53614a6698097a7622f/wgpu/src/util/device.rs#L79-L146
+pub(super) fn create_texture_with_first_mip_data(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    desc: &wgpu::TextureDescriptor,
+    data: &[u8],
+) -> wgpu::Texture {
+    // Implicitly add the COPY_DST usage
+    let mut desc = desc.to_owned();
+    desc.usage |= wgpu::TextureUsages::COPY_DST;
+    let texture = device.create_texture(&desc);
+
+    let format_info = desc.format.describe();
+    let layer_iterations = desc.array_layer_count();
+
+    let mut binary_offset = 0;
+    for layer in 0..layer_iterations {
+        let width_blocks = desc.size.width / format_info.block_dimensions.0 as u32;
+        let height_blocks = desc.size.height / format_info.block_dimensions.1 as u32;
+
+        let bytes_per_row = width_blocks * format_info.block_size as u32;
+        let data_size = bytes_per_row * height_blocks * desc.size.depth_or_array_layers;
+
+        let end_offset = binary_offset + data_size as usize;
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data[binary_offset..end_offset],
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(NonZeroU32::new(bytes_per_row).expect("invalid bytes per row")),
+                rows_per_image: Some(NonZeroU32::new(height_blocks).expect("invalid height")),
+            },
+            desc.size,
+        );
+
+        binary_offset = end_offset;
+    }
+
+    texture
+}
+
+fn mip_levels_for_image_size(width: u32, height: u32) -> u32 {
+    (width.max(height) as f32).log2() as u32 + 1
 }

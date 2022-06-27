@@ -1,57 +1,5 @@
 use super::*;
 
-// Like the following, except without trying to write subsequent mips.
-// https://github.com/gfx-rs/wgpu/blob/0b61a191244da0f0d987d53614a6698097a7622f/wgpu/src/util/device.rs#L79-L146
-pub(super) fn create_texture_with_first_mip_data(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    desc: &wgpu::TextureDescriptor,
-    data: &[u8],
-) -> wgpu::Texture {
-    // Implicitly add the COPY_DST usage
-    let mut desc = desc.to_owned();
-    desc.usage |= wgpu::TextureUsages::COPY_DST;
-    let texture = device.create_texture(&desc);
-
-    let format_info = desc.format.describe();
-    let layer_iterations = desc.array_layer_count();
-
-    let mut binary_offset = 0;
-    for layer in 0..layer_iterations {
-        let width_blocks = desc.size.width / format_info.block_dimensions.0 as u32;
-        let height_blocks = desc.size.height / format_info.block_dimensions.1 as u32;
-
-        let bytes_per_row = width_blocks * format_info.block_size as u32;
-        let data_size = bytes_per_row * height_blocks * desc.size.depth_or_array_layers;
-
-        let end_offset = binary_offset + data_size as usize;
-
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: 0,
-                    z: layer,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data[binary_offset..end_offset],
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(NonZeroU32::new(bytes_per_row).expect("invalid bytes per row")),
-                rows_per_image: Some(NonZeroU32::new(height_blocks).expect("invalid height")),
-            },
-            desc.size,
-        );
-
-        binary_offset = end_offset;
-    }
-
-    texture
-}
-
 pub(super) fn load_standard_image_format(
     context: &ModelLoadContext,
     format_bytes: &[u8],

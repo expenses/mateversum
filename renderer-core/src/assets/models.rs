@@ -1,15 +1,23 @@
+use super::materials::MaterialBindings;
+use super::textures::{self, load_image_with_mime_type, ImageSource};
 use super::HttpClient;
+use crate::{
+    utils::{Setter, Swappable},
+    BindGroupLayouts, Texture,
+};
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-pub struct Context<T: HttpClient + 'static> {
+pub struct Context<T> {
     pub http_client: T,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
+    pub bind_group_layouts: Arc<BindGroupLayouts>,
     pub vertex_buffers: Arc<parking_lot::Mutex<crate::buffers::VertexBuffers>>,
     pub index_buffer: Arc<parking_lot::Mutex<crate::buffers::IndexBuffer>>,
+    pub pipelines: Arc<crate::Pipelines>,
 }
 
 #[derive(Default, Debug)]
@@ -20,7 +28,17 @@ pub struct PrimitiveRanges {
     pub alpha_clipped_double_sided: Range<usize>,
 }
 
-#[derive(Default)]
+fn get_buffer<'a>(
+    gltf: &'a gltf::Gltf,
+    buffer_map: &'a HashMap<usize, Vec<u8>>,
+    buffer: gltf::Buffer,
+) -> Option<&'a [u8]> {
+    match buffer.source() {
+        gltf::buffer::Source::Bin => Some(gltf.blob.as_ref().unwrap()),
+        gltf::buffer::Source::Uri(_) => buffer_map.get(&buffer.index()).map(|vec| &vec[..]),
+    }
+}
+
 pub struct Model {
     pub primitives: Vec<Primitive>,
     pub primitive_ranges: PrimitiveRanges,
@@ -29,7 +47,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub async fn load<T: HttpClient>(
+    pub async fn load<T: HttpClient + Clone + 'static>(
         context: &Context<T>,
         root_url: &url::Url,
     ) -> anyhow::Result<Model> {
@@ -47,7 +65,7 @@ impl Model {
                     let url = url::Url::options().base_url(Some(root_url)).parse(uri)?;
 
                     if url.scheme() == "data" {
-                        let (mime_type, data) = url.path().split_once(',').unwrap();
+                        let (_mime_type, data) = url.path().split_once(',').unwrap();
                         log::warn!("Loading buffers from embedded base64 is inefficient. Consider moving the buffers into a seperate file.");
                         buffer_map.insert(buffer.index(), base64::decode(data)?);
                     } else {
@@ -92,12 +110,7 @@ impl Model {
                     (_, true) => &mut alpha_clipped_double_sided_primitives,
                 };
 
-                let reader = primitive.reader(|buffer| match buffer.source() {
-                    gltf::buffer::Source::Bin => Some(gltf.blob.as_ref().unwrap()),
-                    gltf::buffer::Source::Uri(_) => {
-                        buffer_map.get(&buffer.index()).map(|vec| &vec[..])
-                    }
-                });
+                let reader = primitive.reader(|buffer| get_buffer(&gltf, &buffer_map, buffer));
 
                 // Workaround for some exporters (Scaniverse) exporting scanned models that are meant to be
                 // rendered unlit but don't set the material flag.
@@ -159,17 +172,49 @@ impl Model {
             }
         }
 
-        fn collect_primitives<'a, T: std::iter::Iterator<Item = &'a StagingPrimitive>>(
+        fn collect_primitives<
+            'a,
+            T: HttpClient + Clone + 'static,
+            I: std::iter::Iterator<Item = &'a StagingPrimitive>,
+        >(
             primitives: &mut Vec<Primitive>,
             staging_buffers: &mut StagingBuffers,
-            staging_primitives: T,
+            staging_primitives: I,
+            context: &Context<T>,
+            gltf: Arc<gltf::Gltf>,
+            buffer_map: Arc<HashMap<usize, Vec<u8>>>,
+            root_url: &url::Url,
         ) -> Range<usize> {
             let primitives_start = primitives.len();
 
             for staging_primitive in staging_primitives {
+                let material_bindings = MaterialBindings::new(
+                    &context.device,
+                    &context.queue,
+                    context.bind_group_layouts.clone(),
+                    &staging_primitive.material_settings,
+                );
+
+                let bind_group = Swappable::new(Arc::new(
+                    material_bindings.create_bind_group(&context.device),
+                ));
+
+                let bind_group_setter = bind_group.setter.clone();
+
                 primitives.push(Primitive {
                     index_buffer_range: staging_buffers.collect(&staging_primitive.buffers),
+                    bind_group: bind_group,
                 });
+
+                spawn_texture_loading_futures(
+                    bind_group_setter,
+                    material_bindings,
+                    staging_primitive.material_index,
+                    gltf.clone(),
+                    buffer_map.clone(),
+                    context,
+                    root_url,
+                )
             }
 
             let primitives_end = primitives.len();
@@ -183,27 +228,45 @@ impl Model {
         let mut staging_buffers = StagingBuffers::default();
 
         let mut primitives = Vec::new();
+        let gltf = Arc::new(gltf);
+        let buffer_map = Arc::new(buffer_map);
 
         let primitive_ranges = PrimitiveRanges {
             opaque: collect_primitives(
                 &mut primitives,
                 &mut staging_buffers,
                 opaque_primitives.values(),
+                context,
+                gltf.clone(),
+                buffer_map.clone(),
+                &root_url,
             ),
             alpha_clipped: collect_primitives(
                 &mut primitives,
                 &mut staging_buffers,
                 alpha_clipped_primitives.values(),
+                context,
+                gltf.clone(),
+                buffer_map.clone(),
+                &root_url,
             ),
             opaque_double_sided: collect_primitives(
                 &mut primitives,
                 &mut staging_buffers,
                 opaque_double_sided_primitives.values(),
+                context,
+                gltf.clone(),
+                buffer_map.clone(),
+                &root_url,
             ),
             alpha_clipped_double_sided: collect_primitives(
                 &mut primitives,
                 &mut staging_buffers,
                 alpha_clipped_double_sided_primitives.values(),
+                context,
+                gltf.clone(),
+                buffer_map.clone(),
+                &root_url,
             ),
         };
 
@@ -262,6 +325,7 @@ struct StagingPrimitive {
 
 pub struct Primitive {
     pub index_buffer_range: Range<u32>,
+    pub bind_group: Swappable<Arc<wgpu::BindGroup>>,
 }
 
 #[derive(Default)]
@@ -287,5 +351,109 @@ impl StagingBuffers {
         let indices_end = self.indices.len() as u32;
 
         indices_start..indices_end
+    }
+}
+
+fn spawn_texture_loading_futures<T: HttpClient + Clone + 'static>(
+    bind_group_setter: Setter<Arc<wgpu::BindGroup>>,
+    material_bindings: MaterialBindings,
+    material_index: usize,
+    gltf: Arc<gltf::Gltf>,
+    buffer_map: Arc<HashMap<usize, Vec<u8>>>,
+    context: &Context<T>,
+    root_url: &url::Url,
+) {
+    // todo: might need to use an async mutex here.
+    let material_bindings = Arc::new(parking_lot::Mutex::new(material_bindings));
+
+    let textures_context = textures::Context {
+        bind_group_layouts: context.bind_group_layouts.clone(),
+        device: context.device.clone(),
+        queue: context.queue.clone(),
+        http_client: context.http_client.clone(),
+        pipelines: context.pipelines.clone(),
+    };
+
+    wasm_bindgen_futures::spawn_local({
+        let material_bindings = Arc::clone(&material_bindings);
+        let textures_context = textures_context.clone();
+        let root_url = root_url.clone();
+
+        async move {
+            if let Some(material) = gltf.materials().nth(material_index) {
+                let pbr = material.pbr_metallic_roughness();
+                if let Some(albedo_texture) = pbr.base_color_texture() {
+                    let albedo_texture = albedo_texture.texture();
+
+                    let image_source = albedo_texture.source();
+
+                    let source = image_source.source();
+
+                    let result = load_image_from_source(
+                        source,
+                        &gltf,
+                        &buffer_map,
+                        true,
+                        &textures_context,
+                        &root_url,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(texture) => {
+                            let mut material_bindings = material_bindings.lock();
+
+                            material_bindings.albedo = texture;
+
+                            bind_group_setter.set(Arc::new(
+                                material_bindings.create_bind_group(&textures_context.device),
+                            ));
+                        }
+                        Err(error) => {
+                            log::info!("Failed to load tex: {}", error)
+                        }
+                    }
+                }
+            } else {
+                log::warn!("Material index is invalid or model doesn't contain any materials.")
+            }
+        }
+    });
+}
+
+async fn load_image_from_source<T: HttpClient + 'static>(
+    source: gltf::image::Source<'_, ()>,
+    gltf: &gltf::Gltf,
+    buffer_map: &HashMap<usize, Vec<u8>>,
+    srgb: bool,
+    context: &textures::Context<T>,
+    root_url: &url::Url,
+) -> anyhow::Result<Arc<Texture>> {
+    match source {
+        gltf::image::Source::View { mime_type, view } => {
+            let buffer = get_buffer(&gltf, &buffer_map, view.buffer()).unwrap();
+
+            let bytes = &buffer[view.offset()..view.offset() + view.length()];
+
+            load_image_with_mime_type(ImageSource::Bytes(bytes), srgb, Some(mime_type), context)
+                .await
+        }
+        gltf::image::Source::Uri { uri, mime_type } => {
+            let url = url::Url::options().base_url(Some(root_url)).parse(uri)?;
+
+            if url.scheme() == "data" {
+                let (_mime_type, data) = url
+                    .path()
+                    .split_once(',')
+                    .ok_or_else(|| anyhow::anyhow!("Failed to get data uri seperator"))?;
+
+                let bytes = base64::decode(data)?;
+
+                load_image_with_mime_type(ImageSource::Bytes(&bytes), srgb, mime_type, context)
+                    .await
+            } else {
+                load_image_with_mime_type(ImageSource::Url(url), srgb, mime_type, context).await
+            }
+        }
     }
 }
