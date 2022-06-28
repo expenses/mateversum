@@ -39,9 +39,9 @@ struct LinearSampler(Arc<wgpu::Sampler>);
 
 struct ModelUrls(pub HashMap<url::Url, Entity>);
 
-struct NewIblTextures(pub Option<NewIblTexturesInner>);
+pub struct NewIblTextures(pub Option<NewIblTexturesInner>);
 
-struct NewIblTexturesInner {
+pub struct NewIblTexturesInner {
     pub diffuse_cubemap: url::Url,
     pub specular_cubemap: url::Url,
 }
