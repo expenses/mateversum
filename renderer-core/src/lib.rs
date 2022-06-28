@@ -3,9 +3,12 @@ mod buffers;
 mod instance;
 mod pipelines;
 
+pub mod ibl;
+
 pub mod assets;
 pub mod utils;
 
+pub use arc_swap;
 pub use bytemuck;
 pub use crevice;
 pub use glam;
@@ -190,4 +193,43 @@ impl Texture {
             texture,
         }
     }
+}
+
+pub fn create_main_bind_group(
+    device: &wgpu::Device,
+    ibl_textures: &ibl::IblTextures,
+    uniform_buffer: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    bind_group_layouts: &BindGroupLayouts,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("main bind group"),
+        layout: &bind_group_layouts.uniform,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&ibl_textures.ggx_lut.load().view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(
+                    &ibl_textures.diffuse_cubemap.load().view,
+                ),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(
+                    &ibl_textures.specular_cubemap.load().view,
+                ),
+            },
+        ],
+    })
 }

@@ -28,6 +28,7 @@ base64 = "0.13.0"
 range-alloc = { git = "https://github.com/expenses/gfx", branch = "range-allocator" }
 parking_lot = "0.12.1"
 image = { version = "0.24.2", default-features = false, features = ["jpeg", "png"] }
+arc-swap = "1.5.0"
 
 [dependencies.web-sys]
 version = "0.3.57"
@@ -38,4 +39,5 @@ features = [
     "WebGl2RenderingContext",
     "XrRigidTransform",
     "DomPointReadOnly",
+    "XrWebGlLayer",
 ]

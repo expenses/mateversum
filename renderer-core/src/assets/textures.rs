@@ -7,12 +7,18 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
+pub struct Settings {
+    pub anisotropy_clamp: Option<std::num::NonZeroU8>,
+}
+
+#[derive(Clone)]
 pub struct Context<T> {
     pub pipelines: Arc<crate::Pipelines>,
     pub bind_group_layouts: Arc<crate::BindGroupLayouts>,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub http_client: T,
+    pub settings: Settings,
 }
 
 pub async fn load_ktx2_cubemap<T: HttpClient + Clone + 'static>(
@@ -337,20 +343,26 @@ pub(super) async fn load_image_with_mime_type<T: HttpClient + 'static>(
         _ => load_image_crate_image(
             &source.get_bytes(&context.http_client).await?,
             srgb,
+            true,
             context,
         ),
     }
 }
 
-fn load_image_crate_image<T>(
+pub fn load_image_crate_image<T>(
     bytes: &[u8],
     srgb: bool,
+    generate_mipmaps: bool,
     context: &Context<T>,
 ) -> anyhow::Result<Arc<Texture>> {
     let image = image::load_from_memory(bytes)?;
     let image = image.to_rgba8();
 
-    let mip_level_count = mip_levels_for_image_size(image.width(), image.height());
+    let mip_level_count = if generate_mipmaps {
+        mip_levels_for_image_size(image.width(), image.height())
+    } else {
+        1
+    };
 
     let format = if srgb {
         wgpu::TextureFormat::Rgba8UnormSrgb
@@ -376,6 +388,10 @@ fn load_image_crate_image<T>(
         },
         &*image,
     ));
+
+    if !generate_mipmaps {
+        return Ok(Arc::new(texture));
+    }
 
     let temp_blit_textures: Vec<_> = (1..mip_level_count)
         .map(|level| {

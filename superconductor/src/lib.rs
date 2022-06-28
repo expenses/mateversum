@@ -5,38 +5,46 @@ use std::ops::Range;
 use std::sync::Arc;
 
 pub mod components;
+mod systems;
 
 pub use bevy_app;
 pub use bevy_ecs;
 pub use renderer_core;
 pub use url;
 
-pub use renderer_core::glam::Vec3;
+pub use renderer_core::{assets::textures, glam::Vec3, utils::Swappable};
 
 use components::Instance;
 
 pub struct Device(Arc<wgpu::Device>);
 pub struct Queue(Arc<wgpu::Queue>);
-pub struct Pipelines(Arc<renderer_core::Pipelines>);
-pub struct BindGroupLayouts(Arc<renderer_core::BindGroupLayouts>);
+struct Pipelines(Arc<renderer_core::Pipelines>);
+struct BindGroupLayouts(Arc<renderer_core::BindGroupLayouts>);
 
-pub struct UniformBuffer(Arc<wgpu::Buffer>);
-pub struct MainBindGroup(Arc<parking_lot::Mutex<wgpu::BindGroup>>);
-pub struct SkyboxUniformBuffer(wgpu::Buffer);
-pub struct SkyboxUniformBindGroup(wgpu::BindGroup);
+struct UniformBuffer(Arc<wgpu::Buffer>);
+struct MainBindGroup(Swappable<wgpu::BindGroup>);
+struct SkyboxUniformBuffer(wgpu::Buffer);
+struct SkyboxUniformBindGroup(wgpu::BindGroup);
 
-pub struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
-pub struct VertexBuffers(Arc<parking_lot::Mutex<renderer_core::VertexBuffers>>);
-pub struct InstanceBuffer(renderer_core::InstanceBuffer);
+struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
+struct VertexBuffers(Arc<parking_lot::Mutex<renderer_core::VertexBuffers>>);
+struct InstanceBuffer(renderer_core::InstanceBuffer);
 
 pub struct FrameTime(pub f64);
 
-pub struct IntermediateDepthFramebuffer(Option<renderer_core::Texture>);
-pub struct IntermediateColorFramebuffer(Option<renderer_core::Texture>);
-pub struct CompositeBindGroup(Option<wgpu::BindGroup>);
-pub struct LinearSampler(Arc<wgpu::Sampler>);
+struct IntermediateDepthFramebuffer(Option<renderer_core::Texture>);
+struct IntermediateColorFramebuffer(Option<renderer_core::Texture>);
+struct CompositeBindGroup(Option<wgpu::BindGroup>);
+struct LinearSampler(Arc<wgpu::Sampler>);
 
-pub struct ModelUrls(pub HashMap<url::Url, Entity>);
+struct ModelUrls(pub HashMap<url::Url, Entity>);
+
+struct NewIblTextures(pub Option<NewIblTexturesInner>);
+
+struct NewIblTexturesInner {
+    pub diffuse_cubemap: url::Url,
+    pub specular_cubemap: url::Url,
+}
 
 #[derive(bevy_ecs::prelude::StageLabel, Debug, PartialEq, Eq, Clone, Hash)]
 pub enum StartupStage {
@@ -50,6 +58,10 @@ pub struct XrPlugin;
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ModelUrls(Default::default()));
+        app.insert_resource(textures::Settings {
+            anisotropy_clamp: Some(std::num::NonZeroU8::new(16).unwrap()),
+        });
+        app.insert_resource(NewIblTextures(None));
 
         app.add_startup_stage(
             StartupStage::PipelineCreation,
@@ -64,6 +76,7 @@ impl Plugin for XrPlugin {
 
         app.add_system(systems::start_loading_models);
         app.add_system(systems::finish_loading_models);
+        app.add_system(systems::update_ibl_textures);
 
         app.add_system(systems::update_uniform_buffers);
         app.add_system(systems::clear_instance_buffer);
@@ -88,8 +101,6 @@ impl Plugin for XrPlugin {
             )));
     }
 }
-
-mod systems;
 
 pub enum Mode {
     Vr,

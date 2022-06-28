@@ -4,26 +4,29 @@ use crate::components::{
 use crate::{
     BindGroupLayouts, CompositeBindGroup, Device, IndexBuffer, InstanceBuffer,
     IntermediateColorFramebuffer, IntermediateDepthFramebuffer, LinearSampler, MainBindGroup,
-    ModelUrls, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer, UniformBuffer,
-    VertexBuffers,
+    ModelUrls, NewIblTextures, Pipelines, Queue, SkyboxUniformBindGroup, SkyboxUniformBuffer,
+    UniformBuffer, VertexBuffers,
 };
 use bevy_ecs::prelude::{Added, Commands, Entity, NonSend, Query, Res, ResMut};
-use renderer_core::utils::Setter;
-use renderer_core::{bytemuck, crevice::std140::AsStd140, shared_structs, Texture};
+use renderer_core::utils::{Setter, Swappable};
+use renderer_core::{
+    arc_swap::ArcSwap, assets::textures, bytemuck, create_main_bind_group,
+    crevice::std140::AsStd140, ibl::IblTextures, shared_structs, Texture,
+};
 use std::sync::Arc;
 
 pub(crate) mod rendering;
 
-pub fn create_bind_group_layouts_and_pipelines(
+pub(crate) fn create_bind_group_layouts_and_pipelines(
     device: Res<Device>,
     pipeline_options: Res<renderer_core::PipelineOptions>,
     mut commands: Commands,
 ) {
     let device = &device.0;
 
-    let bind_group_layouts = renderer_core::BindGroupLayouts::new(&device, &pipeline_options);
+    let bind_group_layouts = renderer_core::BindGroupLayouts::new(device, &pipeline_options);
 
-    let pipelines = renderer_core::Pipelines::new(&device, &bind_group_layouts, &pipeline_options);
+    let pipelines = renderer_core::Pipelines::new(device, &bind_group_layouts, &pipeline_options);
 
     commands.insert_resource(BindGroupLayouts(Arc::new(bind_group_layouts)));
     commands.insert_resource(Pipelines(Arc::new(pipelines)));
@@ -32,7 +35,7 @@ pub fn create_bind_group_layouts_and_pipelines(
     commands.insert_resource(CompositeBindGroup(None));
 }
 
-pub fn clear_instance_buffer(
+pub(crate) fn clear_instance_buffer(
     mut instance_buffer: ResMut<InstanceBuffer>,
     mut query: Query<&mut Instances>,
 ) {
@@ -42,7 +45,7 @@ pub fn clear_instance_buffer(
 }
 
 // Here would be a good place to do culling.
-pub fn push_entity_instances(
+pub(crate) fn push_entity_instances(
     mut instance_query: Query<(&InstanceOf, &Instance)>,
     mut model_query: Query<&mut Instances>,
 ) {
@@ -58,7 +61,7 @@ pub fn push_entity_instances(
     })
 }
 
-pub fn upload_instances(
+pub(crate) fn upload_instances(
     device: Res<Device>,
     queue: Res<Queue>,
     mut instance_buffer: ResMut<InstanceBuffer>,
@@ -80,11 +83,12 @@ pub fn upload_instances(
     queue.0.submit(std::iter::once(command_encoder.finish()));
 }
 
-pub fn allocate_bind_groups(
+pub(crate) fn allocate_bind_groups(
     device: Res<Device>,
     queue: Res<Queue>,
     pipelines: Res<Pipelines>,
     bind_group_layouts: Res<BindGroupLayouts>,
+    texture_settings: Res<textures::Settings>,
     mut commands: Commands,
 ) {
     let device = &device.0;
@@ -92,55 +96,53 @@ pub fn allocate_bind_groups(
     let pipelines = &pipelines.0;
     let bind_group_layouts = &bind_group_layouts.0;
 
-    let ibl_lut_texture = Arc::new(Texture::new(device.create_texture(
-        &wgpu::TextureDescriptor {
-            label: Some("dummy IBL LUT"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
+    let ibl_textures = Arc::new(IblTextures {
+        ggx_lut: ArcSwap::from(Arc::new(Texture::new(device.create_texture(
+            &wgpu::TextureDescriptor {
+                label: Some("dummy IBL LUT"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                sample_count: 1,
+                mip_level_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                format: wgpu::TextureFormat::Rgba16Float,
             },
-            sample_count: 1,
-            mip_level_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            format: wgpu::TextureFormat::Rgba16Float,
-        },
-    )));
-
-    #[rustfmt::skip]
-    let ibl_diffuse_cubemap_texture = Arc::new(Texture::new_cubemap(device.create_texture(
-        &wgpu::TextureDescriptor {
-            label: Some("dummy diffuse cubemap"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 6,
+        )))),
+        diffuse_cubemap: ArcSwap::from(Arc::new(Texture::new_cubemap(device.create_texture(
+            &wgpu::TextureDescriptor {
+                label: Some("dummy diffuse cubemap"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 6,
+                },
+                sample_count: 1,
+                mip_level_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                format: wgpu::TextureFormat::Rgba16Float,
             },
-            sample_count: 1,
-            mip_level_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            format: wgpu::TextureFormat::Rgba16Float,
-        }
-    )));
-
-    #[rustfmt::skip]
-    let ibl_specular_cubemap_texture = Arc::new(Texture::new_cubemap(device.create_texture(
-        &wgpu::TextureDescriptor {
-            label: Some("dummy specular cubemap"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 6,
+        )))),
+        specular_cubemap: ArcSwap::from(Arc::new(Texture::new_cubemap(device.create_texture(
+            &wgpu::TextureDescriptor {
+                label: Some("dummy specular cubemap"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 6,
+                },
+                sample_count: 1,
+                mip_level_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                format: wgpu::TextureFormat::Rgba16Float,
             },
-            sample_count: 1,
-            mip_level_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            format: wgpu::TextureFormat::Rgba16Float,
-        }
-    )));
+        )))),
+    });
 
     let uniform_buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("uniform buffer"),
@@ -175,151 +177,159 @@ pub fn allocate_bind_groups(
         }],
     });
 
-    let main_bind_group = Arc::new(parking_lot::Mutex::new(device.create_bind_group(
-        &wgpu::BindGroupDescriptor {
-            label: Some("main bind group"),
-            layout: &bind_group_layouts.uniform,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&ibl_lut_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&ibl_diffuse_cubemap_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(
-                        &ibl_specular_cubemap_texture.view,
-                    ),
-                },
-            ],
-        },
-    )));
+    let main_bind_group = Swappable::new(create_main_bind_group(
+        device,
+        &ibl_textures,
+        &uniform_buffer,
+        &linear_sampler,
+        bind_group_layouts,
+    ));
+
+    let main_bind_group_setter = main_bind_group.setter.clone();
 
     commands.insert_resource(UniformBuffer(uniform_buffer.clone()));
-    commands.insert_resource(MainBindGroup(main_bind_group.clone()));
+    commands.insert_resource(MainBindGroup(main_bind_group));
     commands.insert_resource(LinearSampler(linear_sampler.clone()));
+    commands.insert_resource(ibl_textures.clone());
 
     commands.insert_resource(SkyboxUniformBuffer(skybox_uniform_buffer));
     commands.insert_resource(SkyboxUniformBindGroup(skybox_uniform_bind_group));
 
-    wasm_bindgen_futures::spawn_local({
-        let device = device.clone();
-        let queue = queue.clone();
-        let pipelines = pipelines.clone();
-        let bind_group_layouts = bind_group_layouts.clone();
-        let linear_sampler = linear_sampler.clone();
+    let textures_context = renderer_core::assets::textures::Context {
+        device: device.clone(),
+        queue: queue.clone(),
+        http_client: super::SimpleHttpClient,
+        bind_group_layouts: bind_group_layouts.clone(),
+        pipelines: pipelines.clone(),
+        settings: texture_settings.clone(),
+    };
 
-        async move {
-            let specular_url = url::Url::parse(
-                "https://expenses.github.io/mateversum-web/environment_maps/helipad/specular_compressed.ktx2",
-            )
+    wasm_bindgen_futures::spawn_local(async move {
+        use renderer_core::assets::HttpClient;
+
+        let lut_url = url::Url::parse("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Viewer/master/assets/images/lut_ggx.png").unwrap();
+
+        // This results in only the skybox being rendered:
+        //let bytes = &include_bytes!("../../lut_ggx.png")[..];
+        let bytes = textures_context
+            .http_client
+            .fetch_bytes(&lut_url, None)
+            .await
             .unwrap();
 
-            let specular_fut = renderer_core::assets::textures::load_ktx2_cubemap(
-                renderer_core::assets::textures::Context {
-                    device: device.clone(),
-                    queue: queue.clone(),
-                    http_client: super::SimpleHttpClient,
-                    bind_group_layouts: bind_group_layouts.clone(),
-                    pipelines: pipelines.clone(),
-                },
-                &specular_url,
-            );
+        let result = renderer_core::assets::textures::load_image_crate_image(
+            &bytes[..],
+            false,
+            false,
+            &textures_context,
+        );
 
-            let diffuse_url = url::Url::parse(
-                "https://expenses.github.io/mateversum-web/environment_maps/helipad/diffuse_compressed.ktx2",
-            )
-            .unwrap();
+        match result {
+            Ok(lut_texture) => {
+                ibl_textures.ggx_lut.store(lut_texture);
 
-            let diffuse_fut = renderer_core::assets::textures::load_ktx2_cubemap(
-                renderer_core::assets::textures::Context {
-                    device: device.clone(),
-                    queue,
-                    http_client: super::SimpleHttpClient,
-                    bind_group_layouts: bind_group_layouts.clone(),
-                    pipelines,
-                },
-                &diffuse_url,
-            );
-
-            let results = futures::future::join(specular_fut, diffuse_fut).await;
-
-            match results {
-                (Ok(ibl_specular_cubemap_texture), Ok(ibl_diffuse_cubemap_texture)) => {
-                    // Bind groups are immutable so we need to rebuild it.
-                    *main_bind_group.lock() =
-                        device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("main bind group"),
-                            layout: &bind_group_layouts.uniform,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: uniform_buffer.as_entire_binding(),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&linear_sampler),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 2,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        &ibl_lut_texture.view,
-                                    ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 3,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        &ibl_diffuse_cubemap_texture.view,
-                                    ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 4,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        &ibl_specular_cubemap_texture.view,
-                                    ),
-                                },
-                            ],
-                        });
-                }
-                _ => {
-                    log::error!("Got an error while trying to load the cubemaps");
-                }
+                main_bind_group_setter.set(create_main_bind_group(
+                    &textures_context.device,
+                    &ibl_textures,
+                    &uniform_buffer,
+                    &linear_sampler,
+                    &textures_context.bind_group_layouts,
+                ));
+            }
+            Err(error) => {
+                log::error!("Got an error while trying to load {}: {}", lut_url, error);
             }
         }
     });
 
     let index_buffer = Arc::new(parking_lot::Mutex::new(renderer_core::IndexBuffer::new(
-        1024, &device,
+        1024, device,
     )));
 
     let vertex_buffers = Arc::new(parking_lot::Mutex::new(renderer_core::VertexBuffers::new(
-        1024, &device,
+        1024, device,
     )));
 
     let instance_buffer = renderer_core::InstanceBuffer::new(
         1,
-        &device,
+        device,
         wgpu::BufferUsages::VERTEX,
         "instance buffer",
     );
 
-    commands.insert_resource(IndexBuffer(index_buffer.clone()));
-    commands.insert_resource(VertexBuffers(vertex_buffers.clone()));
+    commands.insert_resource(IndexBuffer(index_buffer));
+    commands.insert_resource(VertexBuffers(vertex_buffers));
     commands.insert_resource(InstanceBuffer(instance_buffer));
 }
 
-pub fn update_uniform_buffers(
+pub(crate) fn update_ibl_textures(
+    device: Res<Device>,
+    queue: Res<Queue>,
+    pipelines: Res<Pipelines>,
+    bind_group_layouts: Res<BindGroupLayouts>,
+    texture_settings: Res<textures::Settings>,
+    mut new_ibl_textures: ResMut<NewIblTextures>,
+    ibl_textures: Res<Arc<IblTextures>>,
+    linear_sampler: Res<LinearSampler>,
+    main_bind_group: Res<MainBindGroup>,
+    uniform_buffer: Res<UniformBuffer>,
+) {
+    let new_ibl_textures = match new_ibl_textures.0.take() {
+        Some(new_ibl_textures) => new_ibl_textures,
+        None => return,
+    };
+
+    let main_bind_group_setter = main_bind_group.0.setter.clone();
+
+    let device = &device.0;
+    let queue = &queue.0;
+    let pipelines = &pipelines.0;
+    let bind_group_layouts = &bind_group_layouts.0;
+    let linear_sampler = linear_sampler.0.clone();
+    let uniform_buffer = uniform_buffer.0.clone();
+    let ibl_textures = ibl_textures.clone();
+
+    let textures_context = renderer_core::assets::textures::Context {
+        device: device.clone(),
+        queue: queue.clone(),
+        http_client: super::SimpleHttpClient,
+        bind_group_layouts: bind_group_layouts.clone(),
+        pipelines: pipelines.clone(),
+        settings: texture_settings.clone(),
+    };
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let diffuse_fut = renderer_core::assets::textures::load_ktx2_cubemap(
+            textures_context.clone(),
+            &new_ibl_textures.diffuse_cubemap,
+        );
+
+        let specular_fut = renderer_core::assets::textures::load_ktx2_cubemap(
+            textures_context.clone(),
+            &new_ibl_textures.specular_cubemap,
+        );
+
+        match futures::future::join(diffuse_fut, specular_fut).await {
+            (Ok(diffuse_cubemap), Ok(specular_cubemap)) => {
+                ibl_textures.diffuse_cubemap.store(diffuse_cubemap);
+                ibl_textures.specular_cubemap.store(specular_cubemap);
+
+                main_bind_group_setter.set(create_main_bind_group(
+                    &textures_context.device,
+                    &ibl_textures,
+                    &uniform_buffer,
+                    &linear_sampler,
+                    &textures_context.bind_group_layouts,
+                ));
+            }
+            _ => {
+                log::error!("Error file loading cubemaps");
+            }
+        }
+    });
+}
+
+pub(crate) fn update_uniform_buffers(
     pose: NonSend<web_sys::XrViewerPose>,
     pipeline_options: Res<renderer_core::PipelineOptions>,
     queue: Res<Queue>,
@@ -393,13 +403,14 @@ pub fn update_uniform_buffers(
     );
 }
 
-pub fn start_loading_models(
+pub(crate) fn start_loading_models(
     query: Query<(Entity, &ModelUrl), Added<ModelUrl>>,
     device: Res<Device>,
     queue: Res<Queue>,
     pipelines: Res<Pipelines>,
     bind_group_layouts: Res<BindGroupLayouts>,
     (index_buffer, vertex_buffers): (Res<IndexBuffer>, Res<VertexBuffers>),
+    texture_settings: Res<textures::Settings>,
     mut model_urls: ResMut<ModelUrls>,
     mut commands: Commands,
 ) {
@@ -410,6 +421,7 @@ pub fn start_loading_models(
         let url = url.0.clone();
         let vertex_buffers = vertex_buffers.0.clone();
         let index_buffer = index_buffer.0.clone();
+        let texture_settings = texture_settings.clone();
 
         let model_setter = Setter(Default::default());
 
@@ -436,6 +448,7 @@ pub fn start_loading_models(
                         index_buffer,
                         vertex_buffers,
                         pipelines,
+                        texture_settings: texture_settings.clone(),
                     },
                     &url,
                 )
@@ -458,7 +471,7 @@ pub fn start_loading_models(
     })
 }
 
-pub fn finish_loading_models(query: Query<(Entity, &PendingModel)>, mut commands: Commands) {
+pub(crate) fn finish_loading_models(query: Query<(Entity, &PendingModel)>, mut commands: Commands) {
     query.for_each(|(entity, pending_model)| {
         if let Some(mut lock) = pending_model.0 .0.try_lock() {
             if let Some(loaded_model) = lock.take() {

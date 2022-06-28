@@ -18,6 +18,7 @@ pub struct Context<T> {
     pub vertex_buffers: Arc<parking_lot::Mutex<crate::buffers::VertexBuffers>>,
     pub index_buffer: Arc<parking_lot::Mutex<crate::buffers::IndexBuffer>>,
     pub pipelines: Arc<crate::Pipelines>,
+    pub texture_settings: textures::Settings,
 }
 
 #[derive(Default, Debug)]
@@ -196,14 +197,14 @@ impl Model {
                 );
 
                 let bind_group = Swappable::new(Arc::new(
-                    material_bindings.create_bind_group(&context.device),
+                    material_bindings.create_bind_group(&context.device, &context.texture_settings),
                 ));
 
                 let bind_group_setter = bind_group.setter.clone();
 
                 primitives.push(Primitive {
                     index_buffer_range: staging_buffers.collect(&staging_primitive.buffers),
-                    bind_group: bind_group,
+                    bind_group,
                 });
 
                 spawn_texture_loading_futures(
@@ -239,7 +240,7 @@ impl Model {
                 context,
                 gltf.clone(),
                 buffer_map.clone(),
-                &root_url,
+                root_url,
             ),
             alpha_clipped: collect_primitives(
                 &mut primitives,
@@ -248,7 +249,7 @@ impl Model {
                 context,
                 gltf.clone(),
                 buffer_map.clone(),
-                &root_url,
+                root_url,
             ),
             opaque_double_sided: collect_primitives(
                 &mut primitives,
@@ -257,16 +258,16 @@ impl Model {
                 context,
                 gltf.clone(),
                 buffer_map.clone(),
-                &root_url,
+                root_url,
             ),
             alpha_clipped_double_sided: collect_primitives(
                 &mut primitives,
                 &mut staging_buffers,
                 alpha_clipped_double_sided_primitives.values(),
                 context,
-                gltf.clone(),
-                buffer_map.clone(),
-                &root_url,
+                gltf,
+                buffer_map,
+                root_url,
             ),
         };
 
@@ -363,83 +364,188 @@ fn spawn_texture_loading_futures<T: HttpClient + Clone + 'static>(
     context: &Context<T>,
     root_url: &url::Url,
 ) {
-    // todo: might need to use an async mutex here.
-    let material_bindings = Arc::new(parking_lot::Mutex::new(material_bindings));
+    // Early exit if there aren't any materials set.
+    if gltf.materials().nth(material_index).is_none() {
+        log::warn!("Material index is invalid or model doesn't contain any materials.");
+        return;
+    }
 
-    let textures_context = textures::Context {
-        bind_group_layouts: context.bind_group_layouts.clone(),
-        device: context.device.clone(),
-        queue: context.queue.clone(),
-        http_client: context.http_client.clone(),
-        pipelines: context.pipelines.clone(),
+    // This is a little messy. As we're spawning a future for each possible texture I want to make the code that calls
+    // `load_image_from_source_with_followup` as small as possible.
+    let image_context = ImageContext {
+        gltf,
+        buffer_map,
+        root_url: root_url.clone(),
+        textures_context: textures::Context {
+            bind_group_layouts: context.bind_group_layouts.clone(),
+            device: context.device.clone(),
+            queue: context.queue.clone(),
+            http_client: context.http_client.clone(),
+            pipelines: context.pipelines.clone(),
+            settings: context.texture_settings.clone(),
+        },
+        bind_group_setter,
+        material_bindings: Arc::new(material_bindings),
     };
 
     wasm_bindgen_futures::spawn_local({
-        let material_bindings = Arc::clone(&material_bindings);
-        let textures_context = textures_context.clone();
-        let root_url = root_url.clone();
+        let image_context = image_context.clone();
 
         async move {
-            if let Some(material) = gltf.materials().nth(material_index) {
-                let pbr = material.pbr_metallic_roughness();
-                if let Some(albedo_texture) = pbr.base_color_texture() {
-                    let albedo_texture = albedo_texture.texture();
+            let material = image_context
+                .gltf
+                .materials()
+                .nth(material_index)
+                .expect("we checked this earlier");
 
-                    let image_source = albedo_texture.source();
+            let pbr = material.pbr_metallic_roughness();
+            if let Some(albedo_texture) = pbr.base_color_texture() {
+                load_image_from_gltf_with_followup(
+                    albedo_texture.texture(),
+                    true,
+                    &image_context,
+                    |texture| {
+                        image_context.material_bindings.albedo.store(texture);
+                    },
+                )
+                .await;
+            }
+        }
+    });
 
-                    let source = image_source.source();
+    wasm_bindgen_futures::spawn_local({
+        let image_context = image_context.clone();
 
-                    let result = load_image_from_source(
-                        source,
-                        &gltf,
-                        &buffer_map,
-                        true,
-                        &textures_context,
-                        &root_url,
-                    )
-                    .await;
+        async move {
+            let material = image_context
+                .gltf
+                .materials()
+                .nth(material_index)
+                .expect("we checked this earlier");
 
-                    match result {
-                        Ok(texture) => {
-                            let mut material_bindings = material_bindings.lock();
+            let pbr = material.pbr_metallic_roughness();
+            if let Some(metallic_roughness_texture) = pbr.base_color_texture() {
+                load_image_from_gltf_with_followup(
+                    metallic_roughness_texture.texture(),
+                    true,
+                    &image_context,
+                    |texture| {
+                        image_context
+                            .material_bindings
+                            .metallic_roughness
+                            .store(texture);
+                    },
+                )
+                .await;
+            }
+        }
+    });
 
-                            material_bindings.albedo = texture;
+    wasm_bindgen_futures::spawn_local({
+        let image_context = image_context.clone();
 
-                            bind_group_setter.set(Arc::new(
-                                material_bindings.create_bind_group(&textures_context.device),
-                            ));
-                        }
-                        Err(error) => {
-                            log::info!("Failed to load tex: {}", error)
-                        }
-                    }
-                }
-            } else {
-                log::warn!("Material index is invalid or model doesn't contain any materials.")
+        async move {
+            let material = image_context
+                .gltf
+                .materials()
+                .nth(material_index)
+                .expect("we checked this earlier");
+
+            if let Some(normal_texture) = material.normal_texture() {
+                load_image_from_gltf_with_followup(
+                    normal_texture.texture(),
+                    false,
+                    &image_context,
+                    |texture| {
+                        image_context.material_bindings.normal.store(texture);
+                    },
+                )
+                .await;
+            }
+        }
+    });
+
+    wasm_bindgen_futures::spawn_local({
+        async move {
+            let material = image_context
+                .gltf
+                .materials()
+                .nth(material_index)
+                .expect("we checked this earlier");
+
+            if let Some(emissive_texture) = material.emissive_texture() {
+                load_image_from_gltf_with_followup(
+                    emissive_texture.texture(),
+                    false,
+                    &image_context,
+                    |texture| {
+                        image_context.material_bindings.emission.store(texture);
+                    },
+                )
+                .await;
             }
         }
     });
 }
 
-async fn load_image_from_source<T: HttpClient + 'static>(
-    source: gltf::image::Source<'_, ()>,
-    gltf: &gltf::Gltf,
-    buffer_map: &HashMap<usize, Vec<u8>>,
+#[derive(Clone)]
+struct ImageContext<T> {
+    gltf: Arc<gltf::Gltf>,
+    buffer_map: Arc<HashMap<usize, Vec<u8>>>,
+    root_url: url::Url,
+    textures_context: textures::Context<T>,
+    bind_group_setter: Setter<Arc<wgpu::BindGroup>>,
+    material_bindings: Arc<MaterialBindings>,
+}
+
+async fn load_image_from_gltf_with_followup<T: HttpClient + 'static, F: Fn(Arc<Texture>)>(
+    texture: gltf::Texture<'_, ()>,
     srgb: bool,
-    context: &textures::Context<T>,
-    root_url: &url::Url,
+    context: &ImageContext<T>,
+    follow_up: F,
+) {
+    let result = load_image_from_gltf(texture, srgb, context).await;
+
+    match result {
+        Ok(texture) => {
+            follow_up(texture);
+
+            context
+                .bind_group_setter
+                .set(Arc::new(context.material_bindings.create_bind_group(
+                    &context.textures_context.device,
+                    &context.textures_context.settings,
+                )));
+        }
+        Err(error) => {
+            log::error!("Failed to load texture for {}: {}", context.root_url, error);
+        }
+    }
+}
+
+async fn load_image_from_gltf<T: HttpClient + 'static>(
+    texture: gltf::Texture<'_, ()>,
+    srgb: bool,
+    context: &ImageContext<T>,
 ) -> anyhow::Result<Arc<Texture>> {
-    match source {
+    match texture.source().source() {
         gltf::image::Source::View { mime_type, view } => {
-            let buffer = get_buffer(&gltf, &buffer_map, view.buffer()).unwrap();
+            let buffer = get_buffer(&context.gltf, &context.buffer_map, view.buffer()).unwrap();
 
             let bytes = &buffer[view.offset()..view.offset() + view.length()];
 
-            load_image_with_mime_type(ImageSource::Bytes(bytes), srgb, Some(mime_type), context)
-                .await
+            load_image_with_mime_type(
+                ImageSource::Bytes(bytes),
+                srgb,
+                Some(mime_type),
+                &context.textures_context,
+            )
+            .await
         }
         gltf::image::Source::Uri { uri, mime_type } => {
-            let url = url::Url::options().base_url(Some(root_url)).parse(uri)?;
+            let url = url::Url::options()
+                .base_url(Some(&context.root_url))
+                .parse(uri)?;
 
             if url.scheme() == "data" {
                 let (_mime_type, data) = url
@@ -449,10 +555,21 @@ async fn load_image_from_source<T: HttpClient + 'static>(
 
                 let bytes = base64::decode(data)?;
 
-                load_image_with_mime_type(ImageSource::Bytes(&bytes), srgb, mime_type, context)
-                    .await
+                load_image_with_mime_type(
+                    ImageSource::Bytes(&bytes),
+                    srgb,
+                    mime_type,
+                    &context.textures_context,
+                )
+                .await
             } else {
-                load_image_with_mime_type(ImageSource::Url(url), srgb, mime_type, context).await
+                load_image_with_mime_type(
+                    ImageSource::Url(url),
+                    srgb,
+                    mime_type,
+                    &context.textures_context,
+                )
+                .await
             }
         }
     }
