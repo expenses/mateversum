@@ -242,13 +242,9 @@ pub(crate) fn allocate_bind_groups(
         }
     });
 
-    let index_buffer = Arc::new(parking_lot::Mutex::new(renderer_core::IndexBuffer::new(
-        1024, device,
-    )));
+    let index_buffer = Arc::new(renderer_core::IndexBuffer::new(1024, device));
 
-    let vertex_buffers = Arc::new(parking_lot::Mutex::new(renderer_core::VertexBuffers::new(
-        1024, device,
-    )));
+    let vertex_buffers = Arc::new(renderer_core::VertexBuffers::new(1024, device));
 
     let instance_buffer = renderer_core::InstanceBuffer::new(
         1,
@@ -423,7 +419,7 @@ pub(crate) fn start_loading_models(
         let index_buffer = index_buffer.0.clone();
         let texture_settings = texture_settings.clone();
 
-        let model_setter = Setter(Default::default());
+        let model_setter = Arc::new(renderer_core::arc_swap::ArcSwapOption::empty());
 
         commands
             .entity(entity)
@@ -463,7 +459,7 @@ pub(crate) fn start_loading_models(
                         );
                     }
                     Ok(model) => {
-                        model_setter.set(model);
+                        model_setter.store(Some(Arc::new(model)));
                     }
                 }
             }
@@ -473,9 +469,17 @@ pub(crate) fn start_loading_models(
 
 pub(crate) fn finish_loading_models(query: Query<(Entity, &PendingModel)>, mut commands: Commands) {
     query.for_each(|(entity, pending_model)| {
-        if let Some(mut lock) = pending_model.0 .0.try_lock() {
-            if let Some(loaded_model) = lock.take() {
-                commands.entity(entity).insert(Model(loaded_model));
+        if let Some(loaded_model) = pending_model.0.swap(None) {
+            match Arc::try_unwrap(loaded_model) {
+                Ok(loaded_model) => {
+                    commands.entity(entity).insert(Model(loaded_model));
+                }
+                Err(_model) => {
+                    log::error!(
+                        "Reference-counted pending model has more than 1 strong reference: {}",
+                        Arc::strong_count(&_model)
+                    )
+                }
             }
         }
     })

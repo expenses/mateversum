@@ -15,8 +15,8 @@ pub struct Context<T> {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub bind_group_layouts: Arc<BindGroupLayouts>,
-    pub vertex_buffers: Arc<parking_lot::Mutex<crate::buffers::VertexBuffers>>,
-    pub index_buffer: Arc<parking_lot::Mutex<crate::buffers::IndexBuffer>>,
+    pub vertex_buffers: Arc<crate::buffers::VertexBuffers>,
+    pub index_buffer: Arc<crate::buffers::IndexBuffer>,
     pub pipelines: Arc<crate::Pipelines>,
     pub texture_settings: textures::Settings,
 }
@@ -278,7 +278,7 @@ impl Model {
                     label: Some("command encoder"),
                 });
 
-        let vertex_buffer_range = context.vertex_buffers.lock().insert(
+        let vertex_buffer_range = context.vertex_buffers.insert(
             &staging_buffers.positions,
             &staging_buffers.normals,
             &staging_buffers.uvs,
@@ -292,7 +292,7 @@ impl Model {
             *index += vertex_buffer_range.start;
         }
 
-        let index_buffer_range = context.index_buffer.lock().insert(
+        let index_buffer_range = context.index_buffer.insert(
             &staging_buffers.indices,
             &context.device,
             &context.queue,

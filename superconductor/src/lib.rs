@@ -26,8 +26,8 @@ struct MainBindGroup(Swappable<wgpu::BindGroup>);
 struct SkyboxUniformBuffer(wgpu::Buffer);
 struct SkyboxUniformBindGroup(wgpu::BindGroup);
 
-struct IndexBuffer(Arc<parking_lot::Mutex<renderer_core::IndexBuffer>>);
-struct VertexBuffers(Arc<parking_lot::Mutex<renderer_core::VertexBuffers>>);
+struct IndexBuffer(Arc<renderer_core::IndexBuffer>);
+struct VertexBuffers(Arc<renderer_core::VertexBuffers>);
 struct InstanceBuffer(renderer_core::InstanceBuffer);
 
 pub struct FrameTime(pub f64);

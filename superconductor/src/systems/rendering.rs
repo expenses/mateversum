@@ -32,11 +32,12 @@ pub(crate) fn render(
     let pipelines = &pipelines.0;
     let bind_group_layouts = &bind_group_layouts.0;
     let main_bind_group = main_bind_group.0.get();
-
-    // These `.lock`s looks scary, but it will never actually block (in wasm)
-    // because that would panic the main thread otherwise!
-    let vertex_buffers = &vertex_buffers.0.lock();
-    let index_buffer = &index_buffer.0.lock();
+    let (position_buffer, normal_buffer, uv_buffer) = (
+        vertex_buffers.0.position.load(),
+        vertex_buffers.0.normal.load(),
+        vertex_buffers.0.uv.load(),
+    );
+    let index_buffer = &index_buffer.0.buffer.load();
 
     let xr_session: web_sys::XrSession = frame.session();
 
@@ -197,10 +198,10 @@ pub(crate) fn render(
     });
 
     {
-        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.set_vertex_buffer(0, vertex_buffers.position.slice(..));
-        render_pass.set_vertex_buffer(1, vertex_buffers.normal.slice(..));
-        render_pass.set_vertex_buffer(2, vertex_buffers.uv.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.set_vertex_buffer(0, position_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, normal_buffer.slice(..));
+        render_pass.set_vertex_buffer(2, uv_buffer.slice(..));
         render_pass.set_vertex_buffer(3, instance_buffer.0.buffer.slice(..));
 
         render_pass.set_bind_group(0, main_bind_group, &[]);
